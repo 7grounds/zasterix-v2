@@ -17,6 +17,8 @@ export default function Page() {
   const [entries, setEntries] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSeeding, setIsSeeding] = useState(false);
+  const [noteInput, setNoteInput] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
 
   const loadEntries = useCallback(async () => {
     if (!supabase) return;
@@ -74,6 +76,31 @@ export default function Page() {
     };
   }, [loadEntries]);
 
+  const handleSaveNote = async () => {
+    if (!supabase) return;
+    const trimmed = noteInput.trim();
+    if (!trimmed) return;
+    setIsSaving(true);
+
+    const payload = {
+      notiz: trimmed,
+      quelle: "Handy",
+    };
+    const { error } = await supabase
+      .from("universal_history")
+      .insert({ payload })
+      .select("id");
+
+    if (error) {
+      setStatusMessage(`Fehler: ${error.message}`);
+    } else {
+      setNoteInput("");
+      await loadEntries();
+    }
+
+    setIsSaving(false);
+  };
+
   const handleSeed = async () => {
     if (!supabase) return;
     setIsSeeding(true);
@@ -104,6 +131,27 @@ export default function Page() {
           <h1 className="text-2xl font-semibold">Universal History Feed</h1>
           <p className="text-sm text-slate-400">{statusMessage}</p>
         </header>
+
+        <div className="rounded-2xl border border-slate-800/70 bg-slate-900/60 px-4 py-4">
+          <label className="text-xs uppercase tracking-[0.2em] text-slate-400">
+            Neue Notiz
+            <textarea
+              className="mt-2 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-emerald-400 focus:outline-none"
+              rows={3}
+              placeholder="Notiz eingeben..."
+              value={noteInput}
+              onChange={(event) => setNoteInput(event.target.value)}
+            />
+          </label>
+          <button
+            className="mt-3 rounded-full bg-emerald-500 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-slate-900 hover:bg-emerald-400 disabled:opacity-60"
+            type="button"
+            onClick={handleSaveNote}
+            disabled={isSaving || !noteInput.trim()}
+          >
+            {isSaving ? "Speichern..." : "Log speichern"}
+          </button>
+        </div>
 
         {isLoading ? (
           <div className="rounded-2xl border border-slate-800/70 bg-slate-900/60 px-4 py-4 text-sm text-slate-300">
