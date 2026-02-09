@@ -15,6 +15,19 @@ type AgentRequest = {
 
 const OPENAI_MODEL = "gpt-4o";
 
+const TOOL_REGISTRY = [
+  { name: "user_asset_history", status: "active" },
+  { name: "progress_tracker", status: "active" },
+  { name: "external_search", status: "unconfigured", aliases: ["web_search"] },
+  { name: "agent_router", status: "active" },
+  { name: "agent_call", status: "active" },
+  { name: "generate_agent_definition", status: "active" },
+  { name: "process_enterprise_list", status: "active" },
+  { name: "universal_history", status: "active" },
+  { name: "agent_templates", status: "active" },
+  { name: "tool_registry", status: "active" },
+];
+
 const resolveSupabaseConfig = () => {
   return {
     url:
@@ -728,6 +741,49 @@ const dispatchTool = async ({
       return { error: error.message };
     }
     return { data };
+  }
+
+  if (toolName === "agent_templates") {
+    const payload = tool.payload ?? {};
+    const limitRaw = payload.limit;
+    const limit =
+      typeof limitRaw === "number" && Number.isFinite(limitRaw)
+        ? Math.min(Math.max(Math.floor(limitRaw), 1), 200)
+        : 100;
+    const orgId =
+      typeof payload.organization_id === "string"
+        ? payload.organization_id.trim()
+        : organizationId ?? "";
+    const search =
+      typeof payload.search === "string" ? payload.search.trim() : "";
+    const includePrompts =
+      payload.include_prompts === true || payload.includePrompts === true;
+    const fields = includePrompts
+      ? "id, name, description, system_prompt, allowed_tools, organization_id, parent_id, created_at"
+      : "id, name, description, allowed_tools, organization_id, parent_id, created_at";
+
+    let query = supabase
+      .from("agent_templates")
+      .select(fields)
+      .order("created_at", { ascending: false })
+      .limit(limit);
+
+    if (orgId) {
+      query = query.eq("organization_id", orgId);
+    }
+    if (search) {
+      query = query.ilike("name", `%${search}%`);
+    }
+
+    const { data, error } = await query;
+    if (error) {
+      return { error: error.message };
+    }
+    return { data };
+  }
+
+  if (toolName === "tool_registry") {
+    return { data: { tools: TOOL_REGISTRY } };
   }
 
   if (toolName === "universal_history") {
