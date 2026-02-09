@@ -300,7 +300,7 @@ const buildFeedbackMessage = (evaluations: CompletedTaskEntry[]) => {
       const score = entry.evaluation?.score;
       const feedback = entry.evaluation?.feedback ?? "Step bewertet.";
       return `Step ${entry.task_id}: ${
-        score !== undefined && score !== null ? `Score ${score}/10` : "Bewertet"
+        score !== undefined && score !== null ? `Score ${score}/10` : "Reviewed"
       } – ${feedback}`;
     })
     .join("\n");
@@ -371,7 +371,7 @@ const evaluateTasks = async ({
 }): Promise<CompletedTaskEntry[]> => {
   if (tasks.length === 0) return [];
   try {
-    const evaluationPrompt = `Bewerte die folgenden abgeschlossenen Steps. Gib ausschließlich JSON zurück als Array mit Objekten { "task_id": string, "score": number (1-10), "feedback": string }.
+    const evaluationPrompt = `Evaluate the completed steps below. Return ONLY JSON as an array of objects { "task_id": string, "score": number (1-10), "feedback": string }.
 
 Steps: ${tasks.join(", ")}
 User Input: ${userMessage}
@@ -390,7 +390,7 @@ Agent Response: ${replyText}
           {
             role: "system",
             content:
-              "Du bist ein strenger, aber fairer Bewertungsassistent für Aufgabenfortschritt.",
+              "You are a strict but fair evaluator of task progress.",
           },
           { role: "user", content: evaluationPrompt },
         ],
@@ -546,6 +546,7 @@ const ensureAgentTemplate = async ({
   systemPrompt,
   allowedTools,
   isOperative,
+  ownerUserId,
 }: {
   supabase: ReturnType<typeof createClient>;
   organizationId: string;
@@ -555,6 +556,7 @@ const ensureAgentTemplate = async ({
   systemPrompt: string;
   allowedTools?: string[];
   isOperative?: boolean;
+  ownerUserId?: string | null;
 }) => {
   const { data: existing } = await supabase
     .from("agent_templates")
@@ -577,6 +579,7 @@ const ensureAgentTemplate = async ({
       parent_id: parentId ?? null,
       allowed_tools: allowedTools ?? [],
       is_operative: isOperative ?? false,
+      owner_user_id: ownerUserId ?? null,
     })
     .select("id")
     .maybeSingle();
@@ -1511,7 +1514,7 @@ const dispatchTool = async ({
                   { role: "system", content: agentRow.system_prompt },
                   {
                     role: "user",
-                    content: `Operativer Task:\n${title}\n\nDetails:\n${description}\n\nBitte liefere konkrete Handlungsschritte und einen Status-Update.`,
+                    content: `Operative task:\n${title}\n\nDetails:\n${description}\n\nProvide concrete action steps and a status update.`,
                   },
                 ],
                 temperature: 0.2,
@@ -1627,6 +1630,12 @@ const dispatchTool = async ({
       typeof payload.query === "string" ? payload.query.trim() : "";
     const verifiedOnly =
       payload.verified_only === true || payload.verifiedOnly === true;
+    const includeAllOrgs =
+      payload.include_all_orgs === true || payload.includeAllOrgs === true;
+    const orgId =
+      typeof payload.organization_id === "string"
+        ? payload.organization_id.trim()
+        : organizationId ?? "";
     const limitRaw = payload.limit;
     const limit =
       typeof limitRaw === "number" && Number.isFinite(limitRaw)
@@ -1641,6 +1650,9 @@ const dispatchTool = async ({
 
     if (category) {
       queryBuilder = queryBuilder.ilike("category", `%${category}%`);
+    }
+    if (!includeAllOrgs && orgId) {
+      queryBuilder = queryBuilder.eq("organization_id", orgId);
     }
     if (query) {
       queryBuilder = queryBuilder.ilike("title", `%${query}%`);
@@ -1672,6 +1684,14 @@ const dispatchTool = async ({
         : typeof payload.verifiedByAuditor === "boolean"
           ? payload.verifiedByAuditor
           : false;
+    const orgId =
+      typeof payload.organization_id === "string"
+        ? payload.organization_id.trim()
+        : organizationId ?? null;
+    const ownerUserId =
+      typeof payload.owner_user_id === "string"
+        ? payload.owner_user_id.trim()
+        : userId ?? null;
     const content =
       payload.content && typeof payload.content === "object"
         ? payload.content
@@ -1694,6 +1714,8 @@ const dispatchTool = async ({
         content,
         category,
         verified_by_auditor: verifiedByAuditor,
+        organization_id: orgId,
+        owner_user_id: ownerUserId,
       })
       .select("id")
       .maybeSingle();
@@ -2048,7 +2070,7 @@ const dispatchTool = async ({
           target_id: data.id,
           target_name: data.name,
           output,
-          message: "Agent-Delegation abgeschlossen.",
+          message: "Agent delegation completed.",
         },
       };
     } catch (error) {
@@ -2122,6 +2144,7 @@ const dispatchTool = async ({
       systemPrompt,
       allowedTools,
       isOperative,
+      ownerUserId: userId ?? null,
     });
 
     if (!createdId) {
@@ -2141,7 +2164,7 @@ const dispatchTool = async ({
     return {
       data: {
         agent_id: createdId,
-        message: `Agentenprofil "${name}" wurde angelegt.`,
+        message: `Agent profile "${name}" created.`,
       },
     };
   }
@@ -2191,6 +2214,7 @@ const dispatchTool = async ({
       systemPrompt: ceoPrompt,
       allowedTools: [],
       isOperative: true,
+      ownerUserId: userId ?? null,
     });
 
     const blueprint = AGENT_BLUEPRINTS[organizationCategory];
@@ -2218,6 +2242,7 @@ const dispatchTool = async ({
         systemPrompt: agentPrompt,
         allowedTools: [],
         isOperative: true,
+        ownerUserId: userId ?? null,
       });
       blueprintAgents.push({ name: agentName, role, id: agentId });
     }
@@ -2237,6 +2262,7 @@ const dispatchTool = async ({
         systemPrompt: agentPrompt,
         allowedTools: [],
         isOperative: true,
+        ownerUserId: userId ?? null,
       });
       createdAgents.push({ name: agentName, role, id: agentId });
     }
@@ -2326,7 +2352,7 @@ const dispatchTool = async ({
       data: {
         target_id: data.id,
         target_name: data.name,
-        message: `Übergebe an Spezial-Agent ${data.name}...`,
+        message: `Handing off to specialist agent ${data.name}...`,
         session_id: resolvedSessionId || null,
         context_note: contextNote || null,
       },
@@ -2476,10 +2502,8 @@ export async function POST(req: Request) {
     : [];
   const allowedToolsPrompt =
     allowedTools.length > 0
-      ? `\n\nDir stehen folgende Optionen zur Verfügung: ${allowedTools.join(
-          ", ",
-        )}`
-      : "\n\nDir stehen keine Optionen zur Verfügung.";
+      ? `\n\nAvailable options: ${allowedTools.join(", ")}`
+      : "\n\nNo tools are available.";
 
   let replyText = "";
   let outputJson: unknown = null;

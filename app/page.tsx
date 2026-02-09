@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { createClient } from "@supabase/supabase-js";
+import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
 import {
   AGENT_BLUEPRINTS,
   ORGANIZATION_CATEGORY_LABELS,
@@ -10,10 +10,6 @@ import {
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "";
-const supabase =
-  supabaseUrl && supabaseAnonKey
-    ? createClient(supabaseUrl, supabaseAnonKey)
-    : null;
 
 type OrgRow = {
   id: string;
@@ -108,6 +104,7 @@ const FALLBACK_TELEMETRY = [
 ];
 
 export default function Page() {
+  const supabase = useMemo(() => createClientComponentClient(), []);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [clusters, setClusters] = useState<ClusterView[]>([]);
   const [organizations, setOrganizations] = useState<OrgRow[]>([]);
@@ -128,9 +125,10 @@ export default function Page() {
   const [factoryTools, setFactoryTools] = useState("");
   const [factoryOrgId, setFactoryOrgId] = useState("");
   const [factoryShowroomCopy, setFactoryShowroomCopy] = useState(true);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
 
   const canUseSupabase = useMemo(
-    () => Boolean(supabaseUrl && supabaseAnonKey && supabase),
+    () => Boolean(supabaseUrl && supabaseAnonKey),
     [],
   );
 
@@ -263,7 +261,7 @@ export default function Page() {
     buildClusters(orgList, agents);
     setStatusMessage(null);
     setIsLoading(false);
-  }, [buildClusters]);
+  }, [buildClusters, supabase]);
 
   const loadTelemetry = useCallback(async () => {
     if (!supabase) return;
@@ -303,7 +301,7 @@ export default function Page() {
           const agentName = entry.payload.agent_id
             ? agentDirectory[String(entry.payload.agent_id)]
             : null;
-          message = `Operativer Agent ${agentName ?? "Agent"} schließt Task ab`;
+          message = `Operative agent ${agentName ?? "Agent"} completed a task`;
         } else if (type === "strategy_sync") {
           message = `Integrator synchronisiert Kontext: ${String(
             payload.context_update ?? "",
@@ -358,7 +356,7 @@ export default function Page() {
       (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
     );
     setTelemetry(items.slice(0, 12));
-  }, [agentDirectory, orgDirectory]);
+  }, [agentDirectory, orgDirectory, supabase]);
 
   useEffect(() => {
     if (!canUseSupabase) {
@@ -369,6 +367,26 @@ export default function Page() {
 
     loadDashboard();
   }, [canUseSupabase, loadDashboard]);
+
+  useEffect(() => {
+    if (!canUseSupabase) return;
+    let isMounted = true;
+    const loadUser = async () => {
+      const { data } = await supabase.auth.getUser();
+      if (!isMounted) return;
+      setCurrentUserId(data.user?.id ?? null);
+    };
+    loadUser();
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setCurrentUserId(session?.user?.id ?? null);
+    });
+    return () => {
+      isMounted = false;
+      subscription.unsubscribe();
+    };
+  }, [canUseSupabase, supabase]);
 
   useEffect(() => {
     if (!canUseSupabase) return;
@@ -426,7 +444,7 @@ export default function Page() {
 
   const handleHireAgent = async () => {
     if (!supabase) return;
-    if (!factoryOrgId || !factoryName.trim() || !factoryPrompt.trim()) {
+    if (!factoryName.trim() || !factoryPrompt.trim()) {
       setStatusMessage("Please provide organization, name, and system prompt.");
       return;
     }
@@ -438,10 +456,21 @@ export default function Page() {
       .map((entry) => entry.trim())
       .filter(Boolean);
 
+    const resolvedOrgId =
+      factoryOrgId ||
+      organizations.find((org) => org.name === "Zasterix")?.id ||
+      "";
+
+    if (!resolvedOrgId) {
+      setStatusMessage("Organization required.");
+      setIsHiring(false);
+      return;
+    }
+
     const { data: ceoOperative } = await supabase
       .from("agent_templates")
       .select("id")
-      .eq("organization_id", factoryOrgId)
+      .eq("organization_id", resolvedOrgId)
       .in("name", ["Zasterix CEO", "Zasterix CEO: The Essence Keeper"])
       .eq("is_operative", true)
       .order("created_at", { ascending: true })
@@ -453,9 +482,10 @@ export default function Page() {
       description: factoryDescription.trim(),
       system_prompt: factoryPrompt.trim(),
       allowed_tools: tools,
-      organization_id: factoryOrgId,
+      organization_id: resolvedOrgId,
       parent_id: ceoOperative?.id ?? null,
       is_operative: true,
+      owner_user_id: currentUserId ?? undefined,
     });
 
     if (insertError) {
@@ -468,7 +498,7 @@ export default function Page() {
       const { data: ceoDemo } = await supabase
         .from("agent_templates")
         .select("id")
-        .eq("organization_id", factoryOrgId)
+        .eq("organization_id", resolvedOrgId)
         .in("name", ["Zasterix CEO", "Zasterix CEO: The Essence Keeper"])
         .eq("is_operative", false)
         .order("created_at", { ascending: true })
@@ -480,9 +510,10 @@ export default function Page() {
         description: factoryDescription.trim(),
         system_prompt: factoryPrompt.trim(),
         allowed_tools: tools,
-        organization_id: factoryOrgId,
+        organization_id: resolvedOrgId,
         parent_id: ceoDemo?.id ?? null,
         is_operative: false,
+        owner_user_id: currentUserId ?? undefined,
       });
     }
 

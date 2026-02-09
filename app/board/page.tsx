@@ -1,14 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { createClient } from "@supabase/supabase-js";
+import { useEffect, useMemo, useState } from "react";
+import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "";
-const supabase =
-  supabaseUrl && supabaseAnonKey
-    ? createClient(supabaseUrl, supabaseAnonKey)
-    : null;
 
 type HistoryRow = {
   id?: string;
@@ -23,15 +19,16 @@ const renderValue = (value: any) => {
 };
 
 export default function BoardPage() {
+  const supabase = useMemo(() => createClientComponentClient(), []);
   const [rows, setRows] = useState<HistoryRow[]>([]);
-  const [status, setStatus] = useState("Lade Daten...");
+  const [status, setStatus] = useState("Loading data...");
 
   useEffect(() => {
     let isMounted = true;
 
     const loadRows = async () => {
       if (!supabase) {
-        if (isMounted) setStatus("Supabase-Umgebung fehlt.");
+        if (isMounted) setStatus("Supabase environment missing.");
         return;
       }
 
@@ -43,13 +40,13 @@ export default function BoardPage() {
       if (!isMounted) return;
 
       if (error) {
-        setStatus(`Fehler: ${error.message}`);
+        setStatus(`Error: ${error.message}`);
         setRows([]);
         return;
       }
 
       setRows(data ?? []);
-      setStatus(data && data.length > 0 ? "" : "Keine Einträge gefunden.");
+      setStatus(data && data.length > 0 ? "" : "No entries found.");
     };
 
     loadRows();
@@ -57,7 +54,7 @@ export default function BoardPage() {
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [supabase]);
 
   return (
     <main style={{ padding: 24, maxWidth: 960, margin: "0 auto" }}>
@@ -70,7 +67,7 @@ export default function BoardPage() {
         {rows.map((row, index) => {
           const payload = row.payload ?? {};
           const agentName =
-            payload.agent_name ?? payload.agent ?? payload.agent_id ?? "Unbekannt";
+            payload.agent_name ?? payload.agent ?? payload.agent_id ?? "Unknown";
           const userInput = payload.input ?? payload.message ?? "";
           const aiOutput = payload.output ?? payload.reply ?? payload.output_raw ?? "";
 
@@ -90,7 +87,7 @@ export default function BoardPage() {
                 <strong>Input:</strong> {renderValue(userInput)}
               </p>
               <div style={{ marginTop: 8 }}>
-                <strong>Antwort:</strong>
+                <strong>Response:</strong>
                 <pre
                   style={{
                     marginTop: 6,

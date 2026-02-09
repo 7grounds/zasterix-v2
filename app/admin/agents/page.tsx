@@ -1,14 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { createClient } from "@supabase/supabase-js";
+import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "";
-const supabase =
-  supabaseUrl && supabaseAnonKey
-    ? createClient(supabaseUrl, supabaseAnonKey)
-    : null;
 
 type AgentRow = {
   id: string;
@@ -51,12 +47,14 @@ const TOOL_OPTIONS = [
 ];
 
 export default function AdminAgentsPage() {
+  const supabase = useMemo(() => createClientComponentClient(), []);
   const [agents, setAgents] = useState<AgentRow[]>([]);
   const [status, setStatus] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [organizationId, setOrganizationId] = useState<string | null>(null);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [newAgent, setNewAgent] = useState<Draft>({
     name: "",
     description: "",
@@ -65,7 +63,7 @@ export default function AdminAgentsPage() {
   });
 
   const canUseSupabase = useMemo(
-    () => Boolean(supabaseUrl && supabaseAnonKey && supabase),
+    () => Boolean(supabaseUrl && supabaseAnonKey),
     [],
   );
 
@@ -114,7 +112,27 @@ export default function AdminAgentsPage() {
     };
 
     loadOrgAndAgents();
-  }, [canUseSupabase]);
+  }, [canUseSupabase, supabase]);
+
+  useEffect(() => {
+    if (!canUseSupabase) return;
+    let isMounted = true;
+    const loadUser = async () => {
+      const { data } = await supabase.auth.getUser();
+      if (!isMounted) return;
+      setCurrentUserId(data.user?.id ?? null);
+    };
+    loadUser();
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setCurrentUserId(session?.user?.id ?? null);
+    });
+    return () => {
+      isMounted = false;
+      subscription.unsubscribe();
+    };
+  }, [canUseSupabase, supabase]);
 
   const handleCreate = async () => {
     if (!supabase) return;
@@ -129,6 +147,7 @@ export default function AdminAgentsPage() {
       system_prompt: newAgent.system_prompt.trim(),
       allowed_tools: newAgent.allowed_tools,
       organization_id: organizationId ?? undefined,
+      owner_user_id: currentUserId ?? undefined,
     });
 
     if (error) {
@@ -432,7 +451,7 @@ export default function AdminAgentsPage() {
                       {Array.isArray(agent.allowed_tools) &&
                       agent.allowed_tools.length > 0
                         ? agent.allowed_tools.join(", ")
-                        : "keine"}
+                        : "none"}
                     </p>
                     <p style={{ fontSize: 12, color: "#94a3b8" }}>
                       Org ID: {agent.organization_id ?? "Zasterix (default)"}
@@ -462,7 +481,7 @@ export default function AdminAgentsPage() {
                           color: "#fff",
                         }}
                       >
-                        Löschen
+                        Delete
                       </button>
                     </div>
                   </div>

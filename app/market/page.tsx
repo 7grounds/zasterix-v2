@@ -1,14 +1,10 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { createClient } from "@supabase/supabase-js";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "";
-const supabase =
-  supabaseUrl && supabaseAnonKey
-    ? createClient(supabaseUrl, supabaseAnonKey)
-    : null;
 
 type AgentRow = {
   id: string;
@@ -30,6 +26,7 @@ const FEATURED_AGENT_NAMES = [
 ];
 
 export default function MarketPage() {
+  const supabase = useMemo(() => createClientComponentClient(), []);
   const [agents, setAgents] = useState<AgentRow[]>([]);
   const [activeAgent, setActiveAgent] = useState<AgentRow | null>(null);
   const [status, setStatus] = useState<string | null>(null);
@@ -38,6 +35,7 @@ export default function MarketPage() {
   const [isSending, setIsSending] = useState(false);
   const [isLoadingAgents, setIsLoadingAgents] = useState(true);
   const panelRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
 
   useEffect(() => {
     let isMounted = true;
@@ -102,7 +100,26 @@ export default function MarketPage() {
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [supabase]);
+
+  useEffect(() => {
+    let isMounted = true;
+    const loadUser = async () => {
+      const { data } = await supabase.auth.getUser();
+      if (!isMounted) return;
+      setCurrentUserId(data.user?.id ?? null);
+    };
+    loadUser();
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setCurrentUserId(session?.user?.id ?? null);
+    });
+    return () => {
+      isMounted = false;
+      subscription.unsubscribe();
+    };
+  }, [supabase]);
 
   const handleSelectAgent = (agentId: string) => {
     const agent = agents.find((entry) => entry.id === agentId) ?? null;
@@ -137,7 +154,11 @@ export default function MarketPage() {
       const response = await fetch("/api/agent", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ agentId: activeAgent.id, message: trimmed }),
+        body: JSON.stringify({
+          agentId: activeAgent.id,
+          message: trimmed,
+          userId: currentUserId ?? undefined,
+        }),
       });
       const data = await response.json();
       if (!response.ok) {

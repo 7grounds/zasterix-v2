@@ -1,14 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { createClient } from "@supabase/supabase-js";
+import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "";
-const supabase =
-  supabaseUrl && supabaseAnonKey
-    ? createClient(supabaseUrl, supabaseAnonKey)
-    : null;
 
 type OrgRow = {
   id: string;
@@ -37,6 +33,12 @@ type ActivityEntry = {
   timestamp: string;
 };
 
+type HistoryEntry = {
+  id: string;
+  payload: Record<string, unknown>;
+  created_at: string;
+};
+
 const STATUS_LABELS: Record<string, string> = {
   open: "Open",
   assigned: "Assigned",
@@ -46,6 +48,7 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 export default function CommandCenterPage() {
+  const supabase = useMemo(() => createClientComponentClient(), []);
   const [status, setStatus] = useState<string | null>(null);
   const [org, setOrg] = useState<OrgRow | null>(null);
   const [missionInput, setMissionInput] = useState("");
@@ -53,16 +56,23 @@ export default function CommandCenterPage() {
   const [tasks, setTasks] = useState<TaskRow[]>([]);
   const [activity, setActivity] = useState<ActivityEntry[]>([]);
   const [integratorLog, setIntegratorLog] = useState<ActivityEntry[]>([]);
+  const [rawHistory, setRawHistory] = useState<HistoryEntry[]>([]);
   const [agentDirectory, setAgentDirectory] = useState<Record<string, string>>(
     {},
   );
+  const [agents, setAgents] = useState<AgentRow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [lastMissionTriggerAt, setLastMissionTriggerAt] = useState<string | null>(
     null,
   );
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [overrideAgentId, setOverrideAgentId] = useState("");
+  const [overrideMessage, setOverrideMessage] = useState("");
+  const [overrideResponse, setOverrideResponse] = useState<string | null>(null);
+  const [overrideStatus, setOverrideStatus] = useState<string | null>(null);
 
   const canUseSupabase = useMemo(
-    () => Boolean(supabaseUrl && supabaseAnonKey && supabase),
+    () => Boolean(supabaseUrl && supabaseAnonKey),
     [],
   );
 
@@ -95,7 +105,8 @@ export default function CommandCenterPage() {
     }
 
     const directory: Record<string, string> = {};
-    (agentRows ?? []).forEach((agent: AgentRow) => {
+    const list = (agentRows ?? []) as AgentRow[];
+    list.forEach((agent) => {
       directory[agent.id] = agent.name;
     });
 
@@ -104,9 +115,10 @@ export default function CommandCenterPage() {
     setMissionInput(missionValue);
     setLastMissionTriggerAt(orgRow?.mission_updated_at ?? null);
     setAgentDirectory(directory);
+    setAgents(list);
     setStatus(null);
     setIsLoading(false);
-  }, []);
+  }, [supabase]);
 
   const loadMonitoring = useCallback(async () => {
     if (!supabase || !org?.id) return;
@@ -147,6 +159,8 @@ export default function CommandCenterPage() {
       .eq("organization_id", org.id)
       .order("created_at", { ascending: false })
       .limit(12);
+
+    setRawHistory((activityRows ?? []) as HistoryEntry[]);
 
     const activityItems: ActivityEntry[] = [];
     const integratorItems: ActivityEntry[] = [];
@@ -201,7 +215,7 @@ export default function CommandCenterPage() {
 
     setActivity(activityItems);
     setIntegratorLog(integratorItems);
-  }, [org?.id]);
+  }, [org?.id, supabase, org?.mission_updated_at]);
 
   useEffect(() => {
     if (!canUseSupabase) {
@@ -211,6 +225,26 @@ export default function CommandCenterPage() {
     }
     loadBaseData();
   }, [canUseSupabase, loadBaseData]);
+
+  useEffect(() => {
+    if (!canUseSupabase) return;
+    let isMounted = true;
+    const loadUser = async () => {
+      const { data } = await supabase.auth.getUser();
+      if (!isMounted) return;
+      setCurrentUserId(data.user?.id ?? null);
+    };
+    loadUser();
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setCurrentUserId(session?.user?.id ?? null);
+    });
+    return () => {
+      isMounted = false;
+      subscription.unsubscribe();
+    };
+  }, [canUseSupabase, supabase]);
 
   useEffect(() => {
     if (!canUseSupabase || !org?.id) return;
@@ -260,6 +294,7 @@ export default function CommandCenterPage() {
       body: JSON.stringify({
         agentId: ceoRow.id,
         organizationName: "Zasterix",
+        userId: currentUserId ?? undefined,
         message: `Global Mission:\n${mission}\n\nCreate 3-5 strategic milestones (Growth, Finance, Tech). Respond ONLY with a tool call in the format [USE_TOOL: create_task | payload: {...}] and include a tasks array with 3-5 entries (title, description, priority). Assign agent_name where possible (Growth, CFO, CTO).`,
       }),
     });
@@ -287,6 +322,7 @@ export default function CommandCenterPage() {
           body: JSON.stringify({
             agentId: sentinelRow.id,
             organizationName: "Zasterix",
+            userId: currentUserId ?? undefined,
             message: `Mission received:\n${mission}\n\nProvide a short acknowledgement for the Chairman (1-2 sentences).`,
           }),
         });
@@ -312,6 +348,39 @@ export default function CommandCenterPage() {
   const runMissionChain = async (mission: string) => {
     await triggerMissionCEO(mission);
     await triggerSentinelAck(mission);
+  };
+
+  const handleOverride = async () => {
+    if (!overrideAgentId || !overrideMessage.trim()) {
+      setOverrideStatus("Select an agent and enter a command.");
+      return;
+    }
+    setOverrideStatus(null);
+    setOverrideResponse(null);
+
+    try {
+      const response = await fetch("/api/agent", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          agentId: overrideAgentId,
+          organizationName: "Zasterix",
+          userId: currentUserId ?? undefined,
+          message: `Chairman override:\n${overrideMessage.trim()}`,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        setOverrideStatus(data?.error ?? "Override failed.");
+        return;
+      }
+      setOverrideResponse(
+        typeof data.reply === "string" ? data.reply : "Override delivered.",
+      );
+      setOverrideMessage("");
+    } catch (_error) {
+      setOverrideStatus("Network error during override.");
+    }
   };
 
   const handleSaveMission = async () => {
@@ -418,6 +487,51 @@ export default function CommandCenterPage() {
 
         <section className="rounded-2xl border border-slate-800/70 bg-slate-900/60 px-5 py-5">
           <h2 className="text-sm uppercase tracking-[0.3em] text-slate-400">
+            Chairman Override
+          </h2>
+          <p className="mt-2 text-sm text-slate-300">
+            Issue direct commands or inspect internal communications instantly.
+          </p>
+          <div className="mt-4 grid gap-3">
+            <select
+              className="rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100"
+              value={overrideAgentId}
+              onChange={(event) => setOverrideAgentId(event.target.value)}
+            >
+              <option value="">Select agent</option>
+              {agents.map((agent) => (
+                <option key={agent.id} value={agent.id}>
+                  {agent.name}
+                </option>
+              ))}
+            </select>
+            <textarea
+              className="rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100"
+              placeholder="Override command..."
+              rows={3}
+              value={overrideMessage}
+              onChange={(event) => setOverrideMessage(event.target.value)}
+            />
+            <button
+              type="button"
+              className="rounded-full bg-emerald-500 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-slate-900 hover:bg-emerald-400 disabled:opacity-60"
+              onClick={handleOverride}
+            >
+              Send override
+            </button>
+            {overrideStatus ? (
+              <p className="text-xs text-rose-300">{overrideStatus}</p>
+            ) : null}
+            {overrideResponse ? (
+              <div className="rounded-xl border border-slate-800/70 bg-slate-950/50 px-3 py-2 text-sm text-slate-200">
+                {overrideResponse}
+              </div>
+            ) : null}
+          </div>
+        </section>
+
+        <section className="rounded-2xl border border-slate-800/70 bg-slate-900/60 px-5 py-5">
+          <h2 className="text-sm uppercase tracking-[0.3em] text-slate-400">
             Task Wall
           </h2>
           {tasks.length === 0 ? (
@@ -499,6 +613,33 @@ export default function CommandCenterPage() {
               </ul>
             )}
           </div>
+        </section>
+
+        <section className="rounded-2xl border border-slate-800/70 bg-slate-900/60 px-5 py-5">
+          <h2 className="text-sm uppercase tracking-[0.3em] text-slate-400">
+            Internal Communication Log
+          </h2>
+          {rawHistory.length === 0 ? (
+            <p className="mt-3 text-sm text-slate-400">
+              No internal events captured yet.
+            </p>
+          ) : (
+            <ul className="mt-3 space-y-3 text-sm text-slate-200">
+              {rawHistory.map((entry) => (
+                <li
+                  key={entry.id}
+                  className="rounded-xl border border-slate-800/70 bg-slate-950/50 px-3 py-2"
+                >
+                  <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500">
+                    {new Date(entry.created_at).toLocaleString()}
+                  </div>
+                  <pre className="mt-2 whitespace-pre-wrap text-xs text-slate-200">
+                    {JSON.stringify(entry.payload ?? {}, null, 2)}
+                  </pre>
+                </li>
+              ))}
+            </ul>
+          )}
         </section>
       </div>
     </main>

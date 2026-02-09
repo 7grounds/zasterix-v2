@@ -1,14 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { createClient } from "@supabase/supabase-js";
+import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "";
-const supabase =
-  supabaseUrl && supabaseAnonKey
-    ? createClient(supabaseUrl, supabaseAnonKey)
-    : null;
 
 type AgentRow = {
   id: string;
@@ -21,13 +17,14 @@ type AgentRow = {
 };
 
 export default function SystemHealthPage() {
+  const supabase = useMemo(() => createClientComponentClient(), []);
   const [agents, setAgents] = useState<AgentRow[]>([]);
   const [capabilities, setCapabilities] = useState<string[]>([]);
   const [status, setStatus] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   const canUseSupabase = useMemo(
-    () => Boolean(supabaseUrl && supabaseAnonKey && supabase),
+    () => Boolean(supabaseUrl && supabaseAnonKey),
     [],
   );
 
@@ -86,7 +83,7 @@ export default function SystemHealthPage() {
     };
 
     loadHealth();
-  }, [canUseSupabase]);
+  }, [canUseSupabase, supabase]);
 
   return (
     <main style={{ padding: 24, maxWidth: 960, margin: "0 auto" }}>
