@@ -40,6 +40,10 @@ const TOOL_OPTIONS = [
   { value: "tool_registry", label: "tool_registry" },
   { value: "ticket_creation", label: "ticket_creation" },
   { value: "sentiment_analysis", label: "sentiment_analysis" },
+  { value: "create_corrective_task", label: "create_corrective_task" },
+  { value: "get_system_capabilities", label: "get_system_capabilities" },
+  { value: "analyze_synergies", label: "analyze_synergies" },
+  { value: "sync_context", label: "sync_context" },
 ];
 
 export default function AdminAgentsPage() {
@@ -197,6 +201,11 @@ export default function AdminAgentsPage() {
   return (
     <main style={{ padding: 24, maxWidth: 960, margin: "0 auto" }}>
       <h1 style={{ fontSize: 24, fontWeight: 600 }}>Agentenverwaltung</h1>
+      <p style={{ marginTop: 6 }}>
+        <a href="/admin/system-health" style={{ color: "#2563eb" }}>
+          System Health anzeigen
+        </a>
+      </p>
       {status ? (
         <p style={{ marginTop: 12, color: "#f87171" }}>{status}</p>
       ) : null}

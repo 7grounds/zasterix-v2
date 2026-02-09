@@ -28,6 +28,10 @@ const TOOL_REGISTRY = [
   { name: "tool_registry", status: "active" },
   { name: "ticket_creation", status: "active" },
   { name: "sentiment_analysis", status: "active" },
+  { name: "create_corrective_task", status: "active" },
+  { name: "get_system_capabilities", status: "active" },
+  { name: "analyze_synergies", status: "active" },
+  { name: "sync_context", status: "active" },
 ];
 
 const analyzeSentiment = (text: string) => {
@@ -512,6 +516,35 @@ const ensureAgentTemplate = async ({
   return data?.id ?? null;
 };
 
+const resolveAgentIdByName = async ({
+  supabase,
+  organizationId,
+  name,
+}: {
+  supabase: ReturnType<typeof createClient>;
+  organizationId: string;
+  name: string;
+}) => {
+  const resolvedName = name.trim();
+  if (!resolvedName) return null;
+
+  const { data, error } = await supabase
+    .from("agent_templates")
+    .select("id, name")
+    .eq("organization_id", organizationId)
+    .ilike("name", `%${resolvedName}%`)
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    console.error("Agent API: agent lookup failed:", error);
+    return null;
+  }
+
+  return data?.id ?? null;
+};
+
 const parseEnterpriseList = (payload: Record<string, unknown>) => {
   const companyName =
     typeof payload.company_name === "string"
@@ -884,6 +917,124 @@ const dispatchTool = async ({
     };
   }
 
+  if (toolName === "create_corrective_task") {
+    const payload = tool.payload ?? {};
+    const summary =
+      typeof payload.summary === "string"
+        ? payload.summary.trim()
+        : typeof payload.title === "string"
+          ? payload.title.trim()
+          : "";
+    const description =
+      typeof payload.description === "string"
+        ? payload.description.trim()
+        : typeof payload.details === "string"
+          ? payload.details.trim()
+          : typeof payload.message === "string"
+            ? payload.message.trim()
+            : "";
+    const classification =
+      typeof payload.classification === "string"
+        ? payload.classification.trim()
+        : typeof payload.issue_type === "string"
+          ? payload.issue_type.trim()
+          : typeof payload.type === "string"
+            ? payload.type.trim()
+            : "";
+    const reporter =
+      typeof payload.reporter === "string"
+        ? payload.reporter.trim()
+        : typeof userId === "string"
+          ? userId
+          : "";
+    const agentIdRaw =
+      typeof payload.agent_id === "string"
+        ? payload.agent_id.trim()
+        : typeof payload.responsible_agent_id === "string"
+          ? payload.responsible_agent_id.trim()
+          : "";
+    const agentName =
+      typeof payload.agent_name === "string"
+        ? payload.agent_name.trim()
+        : typeof payload.responsible_agent === "string"
+          ? payload.responsible_agent.trim()
+          : typeof payload.module === "string"
+            ? payload.module.trim()
+            : "";
+    const orgId =
+      typeof payload.organization_id === "string"
+        ? payload.organization_id.trim()
+        : organizationId ?? "";
+
+    if (!orgId) {
+      return { error: "create_corrective_task requires organization_id" };
+    }
+
+    if (!summary && !description) {
+      return { error: "create_corrective_task requires summary or description" };
+    }
+
+    let resolvedAgentId = agentIdRaw;
+    if (!resolvedAgentId && agentName) {
+      const resolved = await resolveAgentIdByName({
+        supabase,
+        organizationId: orgId,
+        name: agentName,
+      });
+      resolvedAgentId = resolved ?? "";
+    }
+
+    const title =
+      summary ||
+      `${classification || "Issue"}: ${description.slice(0, 120)}`.trim();
+    const metadata = {
+      classification: classification || null,
+      reporter: reporter || null,
+      responsible_agent_name: agentName || null,
+      sentiment:
+        typeof payload.sentiment === "string" ? payload.sentiment.trim() : null,
+      source: "sentinel",
+    };
+
+    const { data, error } = await supabase
+      .from("tasks")
+      .insert({
+        title,
+        description,
+        priority: "high",
+        is_high_priority: true,
+        status: "open",
+        agent_id: resolvedAgentId || null,
+        organization_id: orgId,
+        source: "sentinel",
+        metadata,
+      })
+      .select("id")
+      .maybeSingle();
+
+    if (error) {
+      return { error: error.message };
+    }
+
+    await supabase.from("universal_history").insert({
+      payload: {
+        type: "corrective_task_created",
+        task_id: data?.id ?? null,
+        agent_id: resolvedAgentId || null,
+        organization_id: orgId,
+        summary: title,
+      },
+      organization_id: orgId,
+    });
+
+    return {
+      data: {
+        task_id: data?.id ?? null,
+        message: "Korrektur-Task wurde erstellt.",
+      },
+    };
+  }
+
   if (toolName === "agent_templates") {
     const payload = tool.payload ?? {};
     const limitRaw = payload.limit;
@@ -925,6 +1076,176 @@ const dispatchTool = async ({
 
   if (toolName === "tool_registry") {
     return { data: { tools: TOOL_REGISTRY } };
+  }
+
+  if (toolName === "get_system_capabilities") {
+    const payload = tool.payload ?? {};
+    const orgId =
+      typeof payload.organization_id === "string"
+        ? payload.organization_id.trim()
+        : organizationId ?? "";
+    const includePrompts =
+      payload.include_prompts === true || payload.includePrompts === true;
+    const fields = includePrompts
+      ? "id, name, description, system_prompt, allowed_tools, organization_id, parent_id, created_at"
+      : "id, name, description, allowed_tools, organization_id, parent_id, created_at";
+
+    if (!orgId) {
+      return { error: "get_system_capabilities requires organization_id" };
+    }
+
+    const { data, error } = await supabase
+      .from("agent_templates")
+      .select(fields)
+      .eq("organization_id", orgId)
+      .order("created_at", { ascending: true });
+
+    if (error) {
+      return { error: error.message };
+    }
+
+    const activeTools = new Set<string>();
+    (data ?? []).forEach((agent: { allowed_tools?: string[] | null }) => {
+      if (Array.isArray(agent.allowed_tools)) {
+        agent.allowed_tools.forEach((tool) => activeTools.add(tool));
+      }
+    });
+
+    return {
+      data: {
+        agents: data ?? [],
+        tools: TOOL_REGISTRY,
+        active_tools: Array.from(activeTools).sort(),
+      },
+    };
+  }
+
+  if (toolName === "analyze_synergies") {
+    const payload = tool.payload ?? {};
+    const skillsRaw =
+      payload.skills ??
+      payload.worker_skills ??
+      payload.team_skills ??
+      payload.expertise;
+    const trendsRaw =
+      payload.market_trends ?? payload.trends ?? payload.market ?? payload.signals;
+
+    const skills = Array.isArray(skillsRaw)
+      ? skillsRaw.filter((entry) => typeof entry === "string")
+      : typeof skillsRaw === "string"
+        ? skillsRaw
+            .split(",")
+            .map((entry) => entry.trim())
+            .filter(Boolean)
+        : [];
+    const trends = Array.isArray(trendsRaw)
+      ? trendsRaw.filter((entry) => typeof entry === "string")
+      : typeof trendsRaw === "string"
+        ? trendsRaw
+            .split(",")
+            .map((entry) => entry.trim())
+            .filter(Boolean)
+        : [];
+
+    if (skills.length === 0 || trends.length === 0) {
+      return {
+        error:
+          "analyze_synergies requires skills and market_trends to cross-reference",
+      };
+    }
+
+    const suggestions: Array<{
+      skill: string;
+      trend: string;
+      rationale: string;
+    }> = [];
+
+    for (const trend of trends) {
+      for (const skill of skills) {
+        if (suggestions.length >= 12) break;
+        suggestions.push({
+          skill,
+          trend,
+          rationale: `Nutze ${skill} um ${trend} schneller zu testen.`,
+        });
+      }
+      if (suggestions.length >= 12) break;
+    }
+
+    return {
+      data: {
+        skills,
+        trends,
+        suggestions,
+      },
+    };
+  }
+
+  if (toolName === "sync_context") {
+    const payload = tool.payload ?? {};
+    const contextUpdate =
+      typeof payload.context_update === "string"
+        ? payload.context_update.trim()
+        : typeof payload.update === "string"
+          ? payload.update.trim()
+          : typeof payload.message === "string"
+            ? payload.message.trim()
+            : "";
+    const orgId =
+      typeof payload.organization_id === "string"
+        ? payload.organization_id.trim()
+        : organizationId ?? "";
+    const targetAgentsRaw =
+      payload.target_agents ?? payload.targets ?? payload.agent_ids;
+    const targetAgents = Array.isArray(targetAgentsRaw)
+      ? targetAgentsRaw.filter((entry) => typeof entry === "string")
+      : typeof targetAgentsRaw === "string"
+        ? targetAgentsRaw
+            .split(",")
+            .map((entry) => entry.trim())
+            .filter(Boolean)
+        : [];
+
+    if (!orgId) {
+      return { error: "sync_context requires organization_id" };
+    }
+    if (!contextUpdate) {
+      return { error: "sync_context requires context_update" };
+    }
+
+    const resolvedTargets: Array<{ id: string | null; name: string }> = [];
+    for (const entry of targetAgents) {
+      const resolved = await resolveAgentIdByName({
+        supabase,
+        organizationId: orgId,
+        name: entry,
+      });
+      resolvedTargets.push({ id: resolved ?? null, name: entry });
+    }
+
+    const { data, error } = await supabase
+      .from("universal_history")
+      .insert({
+        payload: {
+          type: "strategy_sync",
+          context_update: contextUpdate,
+          target_agents: resolvedTargets,
+        },
+        organization_id: orgId,
+      })
+      .select("id")
+      .maybeSingle();
+
+    if (error) {
+      return { error: error.message };
+    }
+
+    return {
+      data: {
+        sync_id: data?.id ?? null,
+        message: "Context wurde synchronisiert.",
+      },
+    };
   }
 
   if (toolName === "universal_history") {
