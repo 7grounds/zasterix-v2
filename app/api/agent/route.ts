@@ -19,6 +19,10 @@ type AgentRequest = {
 
 const OPENAI_MODEL = "gpt-4o";
 
+type SupabaseClientLike = {
+  from: (table: string) => any;
+};
+
 const TOOL_REGISTRY = [
   { name: "user_asset_history", status: "active" },
   { name: "progress_tracker", status: "active" },
@@ -95,7 +99,7 @@ const fetchKnowledgeVaultTemplates = async ({
   category,
   limit = 5,
 }: {
-  supabase: ReturnType<typeof createClient>;
+  supabase: SupabaseClientLike;
   category: string;
   limit?: number;
 }) => {
@@ -192,7 +196,7 @@ const resolveOrganizationId = async ({
   organizationName,
   subOrganization,
 }: {
-  supabase: ReturnType<typeof createClient>;
+  supabase: SupabaseClientLike;
   organizationName?: string;
   subOrganization?: string;
 }) => {
@@ -502,7 +506,7 @@ const resolveOrganizationRecord = async ({
   supabase,
   name,
 }: {
-  supabase: ReturnType<typeof createClient>;
+  supabase: SupabaseClientLike;
   name: string;
 }) => {
   const resolvedName = name.trim();
@@ -548,7 +552,7 @@ const ensureAgentTemplate = async ({
   isOperative,
   ownerUserId,
 }: {
-  supabase: ReturnType<typeof createClient>;
+  supabase: SupabaseClientLike;
   organizationId: string;
   parentId?: string | null;
   name: string;
@@ -598,7 +602,7 @@ const resolveAgentIdByName = async ({
   name,
   preferOperative = true,
 }: {
-  supabase: ReturnType<typeof createClient>;
+  supabase: SupabaseClientLike;
   organizationId: string;
   name: string;
   preferOperative?: boolean;
@@ -719,7 +723,7 @@ const normalizeOrganizationCategory = (
 };
 
 const fetchAgentHierarchy = async (
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClientLike,
 ) => {
   const { data, error } = await supabase
     .from("agent_templates")
@@ -801,7 +805,7 @@ const isNavigator = (agent: { name: string; system_prompt: string }) => {
   );
 };
 
-const buildAgentDirectory = async (supabase: ReturnType<typeof createClient>) => {
+const buildAgentDirectory = async (supabase: SupabaseClientLike) => {
   const { data, error } = await supabase
     .from("agent_templates")
     .select("id, name")
@@ -826,7 +830,7 @@ const updateSessionState = async ({
   contextNote,
   organizationId,
 }: {
-  supabase: ReturnType<typeof createClient>;
+  supabase: SupabaseClientLike;
   sessionId: string;
   targetAgent: { id: string; name: string };
   contextNote?: string;
@@ -884,7 +888,7 @@ const dispatchTool = async ({
   openAiKey,
   organizationId,
 }: {
-  supabase: ReturnType<typeof createClient>;
+  supabase: SupabaseClientLike;
   tool: ToolCall;
   userId?: string;
   stageId?: string;
