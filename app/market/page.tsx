@@ -10,14 +10,27 @@ type ChatMessage = {
 
 export default function MarketPage() {
   const tiles = useMemo(() => AGENTS, []);
+  const [activeAgent, setActiveAgent] = useState(() => AGENTS[0] ?? null);
   const [chatInput, setChatInput] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isSending, setIsSending] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
 
+  const handleSelectAgent = (agentId: string) => {
+    const agent = tiles.find((entry) => entry.id === agentId) ?? null;
+    setActiveAgent(agent);
+    setMessages([]);
+    setStatus(null);
+    setChatInput("");
+  };
+
   const handleSend = async () => {
     const trimmed = chatInput.trim();
     if (!trimmed) return;
+    if (!activeAgent) {
+      setStatus("Bitte zuerst einen Agenten auswählen.");
+      return;
+    }
     setIsSending(true);
     setStatus(null);
     setMessages((prev) => [...prev, { role: "user", content: trimmed }]);
@@ -27,7 +40,7 @@ export default function MarketPage() {
       const response = await fetch("/api/agent", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ agentId: "erbrecht", message: trimmed }),
+        body: JSON.stringify({ agentId: activeAgent.id, message: trimmed }),
       });
       const data = await response.json();
       if (!response.ok) {
@@ -83,11 +96,19 @@ export default function MarketPage() {
           {tiles.map((agent) => (
             <div
               key={agent.id}
+              onClick={() => handleSelectAgent(agent.id)}
               style={{
-                background: "rgba(15, 23, 42, 0.8)",
-                border: "1px solid rgba(148, 163, 184, 0.2)",
+                background:
+                  activeAgent?.id === agent.id
+                    ? "rgba(16, 185, 129, 0.15)"
+                    : "rgba(15, 23, 42, 0.8)",
+                border:
+                  activeAgent?.id === agent.id
+                    ? "1px solid rgba(52, 211, 153, 0.6)"
+                    : "1px solid rgba(148, 163, 184, 0.2)",
                 borderRadius: 16,
                 padding: 16,
+                cursor: "pointer",
               }}
             >
               <div style={{ fontSize: 24 }}>{agent.icon}</div>
@@ -122,10 +143,14 @@ export default function MarketPage() {
         >
           <div>
             <h2 style={{ fontSize: 18, fontWeight: 600 }}>
-              Erbrecht-Agent (Chat-Test)
+              {activeAgent
+                ? `${activeAgent.name} (Chat-Test)`
+                : "Agenten-Chat"}
             </h2>
             <p style={{ fontSize: 13, color: "#94a3b8" }}>
-              Input → Architect → Supabase → Output
+              {activeAgent
+                ? "Input → Architect → Supabase → Output"
+                : "Wähle oben einen Agenten aus."}
             </p>
           </div>
 
@@ -141,7 +166,9 @@ export default function MarketPage() {
           >
             {messages.length === 0 ? (
               <p style={{ fontSize: 13, color: "#64748b" }}>
-                Noch keine Nachrichten.
+                {activeAgent
+                  ? "Noch keine Nachrichten."
+                  : "Bitte zuerst einen Agenten auswählen."}
               </p>
             ) : (
               messages.map((message, index) => (
@@ -166,7 +193,9 @@ export default function MarketPage() {
 
           {isSending ? (
             <p style={{ fontSize: 12, color: "#34d399" }}>
-              Agent analysiert Schweizer Recht...
+              {activeAgent
+                ? `Agent analysiert ${activeAgent.name}...`
+                : "Agent analysiert..."}
             </p>
           ) : null}
           {status ? (
