@@ -41,6 +41,7 @@ const TOOL_OPTIONS = [
   { value: "ticket_creation", label: "ticket_creation" },
   { value: "sentiment_analysis", label: "sentiment_analysis" },
   { value: "create_corrective_task", label: "create_corrective_task" },
+  { value: "create_task_from_feedback", label: "create_task_from_feedback" },
   { value: "get_system_capabilities", label: "get_system_capabilities" },
   { value: "analyze_synergies", label: "analyze_synergies" },
   { value: "sync_context", label: "sync_context" },

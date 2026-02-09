@@ -29,6 +29,7 @@ const TOOL_REGISTRY = [
   { name: "ticket_creation", status: "active" },
   { name: "sentiment_analysis", status: "active" },
   { name: "create_corrective_task", status: "active" },
+  { name: "create_task_from_feedback", status: "active" },
   { name: "get_system_capabilities", status: "active" },
   { name: "analyze_synergies", status: "active" },
   { name: "sync_context", status: "active" },
@@ -1031,6 +1032,133 @@ const dispatchTool = async ({
       data: {
         task_id: data?.id ?? null,
         message: "Korrektur-Task wurde erstellt.",
+      },
+    };
+  }
+
+  if (toolName === "create_task_from_feedback") {
+    const payload = tool.payload ?? {};
+    const summary =
+      typeof payload.summary === "string"
+        ? payload.summary.trim()
+        : typeof payload.title === "string"
+          ? payload.title.trim()
+          : "";
+    const feedback =
+      typeof payload.feedback === "string"
+        ? payload.feedback.trim()
+        : typeof payload.message === "string"
+          ? payload.message.trim()
+          : typeof payload.text === "string"
+            ? payload.text.trim()
+            : "";
+    const description =
+      typeof payload.description === "string"
+        ? payload.description.trim()
+        : typeof payload.details === "string"
+          ? payload.details.trim()
+          : feedback;
+    const classification =
+      typeof payload.classification === "string"
+        ? payload.classification.trim()
+        : typeof payload.issue_type === "string"
+          ? payload.issue_type.trim()
+          : typeof payload.type === "string"
+            ? payload.type.trim()
+            : "";
+    const reporter =
+      typeof payload.reporter === "string"
+        ? payload.reporter.trim()
+        : typeof userId === "string"
+          ? userId
+          : "";
+    const agentIdRaw =
+      typeof payload.agent_id === "string"
+        ? payload.agent_id.trim()
+        : typeof payload.responsible_agent_id === "string"
+          ? payload.responsible_agent_id.trim()
+          : "";
+    const agentName =
+      typeof payload.agent_name === "string"
+        ? payload.agent_name.trim()
+        : typeof payload.responsible_agent === "string"
+          ? payload.responsible_agent.trim()
+          : typeof payload.module === "string"
+            ? payload.module.trim()
+            : "";
+    const orgId =
+      typeof payload.organization_id === "string"
+        ? payload.organization_id.trim()
+        : organizationId ?? "";
+
+    if (!orgId) {
+      return { error: "create_task_from_feedback requires organization_id" };
+    }
+
+    if (!summary && !description) {
+      return {
+        error: "create_task_from_feedback requires summary or description",
+      };
+    }
+
+    let resolvedAgentId = agentIdRaw;
+    if (!resolvedAgentId && agentName) {
+      const resolved = await resolveAgentIdByName({
+        supabase,
+        organizationId: orgId,
+        name: agentName,
+      });
+      resolvedAgentId = resolved ?? "";
+    }
+
+    const title =
+      summary ||
+      `${classification || "Feedback"}: ${description.slice(0, 120)}`.trim();
+    const metadata = {
+      classification: classification || null,
+      reporter: reporter || null,
+      responsible_agent_name: agentName || null,
+      sentiment:
+        typeof payload.sentiment === "string" ? payload.sentiment.trim() : null,
+      source: "sentinel",
+      feedback: feedback || null,
+    };
+
+    const { data, error } = await supabase
+      .from("tasks")
+      .insert({
+        title,
+        description,
+        priority: "high",
+        is_high_priority: true,
+        status: "open",
+        agent_id: resolvedAgentId || null,
+        organization_id: orgId,
+        source: "sentinel",
+        metadata,
+      })
+      .select("id")
+      .maybeSingle();
+
+    if (error) {
+      return { error: error.message };
+    }
+
+    await supabase.from("universal_history").insert({
+      payload: {
+        type: "feedback_task_created",
+        task_id: data?.id ?? null,
+        agent_id: resolvedAgentId || null,
+        organization_id: orgId,
+        summary: title,
+      },
+      organization_id: orgId,
+    });
+
+    return {
+      data: {
+        task_id: data?.id ?? null,
+        message: "Feedback-Task wurde erstellt.",
       },
     };
   }

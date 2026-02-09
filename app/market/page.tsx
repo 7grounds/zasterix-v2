@@ -22,6 +22,13 @@ type ChatMessage = {
   content: string;
 };
 
+const FEATURED_AGENT_NAMES = [
+  "Zasterix Sentinel",
+  "Zasterix System Auditor",
+  "Zasterix Intelligence Agent",
+  "Zasterix Integrator",
+];
+
 export default function MarketPage() {
   const [agents, setAgents] = useState<AgentRow[]>([]);
   const [activeAgent, setActiveAgent] = useState<AgentRow | null>(null);
@@ -44,9 +51,25 @@ export default function MarketPage() {
         return;
       }
 
+      const { data: orgRow, error: orgError } = await supabase
+        .from("organizations")
+        .select("id")
+        .eq("name", "Zasterix")
+        .maybeSingle();
+
+      if (!isMounted) return;
+
+      if (orgError || !orgRow?.id) {
+        setStatus(orgError ? `Fehler: ${orgError.message}` : "Zasterix fehlt.");
+        setAgents([]);
+        setIsLoadingAgents(false);
+        return;
+      }
+
       const { data, error } = await supabase
         .from("agent_templates")
         .select("id, name, description, system_prompt")
+        .eq("organization_id", orgRow.id)
         .order("created_at", { ascending: true });
 
       if (!isMounted) return;
@@ -59,8 +82,16 @@ export default function MarketPage() {
       }
 
       const list = (data ?? []) as AgentRow[];
-      setAgents(list);
-      setActiveAgent((prev) => prev ?? list[0] ?? null);
+      const byName = new Map(list.map((agent) => [agent.name, agent]));
+      const featured = FEATURED_AGENT_NAMES.map((name) => byName.get(name)).filter(
+        Boolean,
+      ) as AgentRow[];
+      const featuredIds = new Set(featured.map((agent) => agent.id));
+      const remainder = list.filter((agent) => !featuredIds.has(agent.id));
+      const ordered = [...featured, ...remainder];
+
+      setAgents(ordered);
+      setActiveAgent((prev) => prev ?? featured[0] ?? ordered[0] ?? null);
       setStatus(null);
       setIsLoadingAgents(false);
     };
@@ -168,40 +199,55 @@ export default function MarketPage() {
             gap: 16,
           }}
         >
-          {agents.map((agent) => (
-            <div
-              key={agent.id}
-              style={{
-                background:
-                  activeAgent?.id === agent.id
-                    ? "rgba(16, 185, 129, 0.12)"
-                    : "rgba(15, 23, 42, 0.8)",
-                border:
-                  activeAgent?.id === agent.id
-                    ? "1px solid rgba(52, 211, 153, 0.6)"
-                    : "1px solid rgba(148, 163, 184, 0.2)",
-                borderRadius: 16,
-                padding: 16,
-                cursor: "pointer",
-                transition: "border 0.2s ease, background 0.2s ease",
-              }}
-              onClick={() => handleSelectAgent(agent.id)}
-            >
-              <h3 style={{ fontSize: 16, fontWeight: 600 }}>{agent.name}</h3>
-              <p style={{ marginTop: 6, fontSize: 13, color: "#94a3b8" }}>
-                {agent.description}
-              </p>
-              <p
+          {agents.map((agent) => {
+            const isFeatured = FEATURED_AGENT_NAMES.includes(agent.name);
+            return (
+              <div
+                key={agent.id}
                 style={{
-                  marginTop: 10,
-                  fontSize: 11,
-                  textTransform: "uppercase",
-                  letterSpacing: "0.2em",
-                  color: "#34d399",
+                  background:
+                    activeAgent?.id === agent.id
+                      ? "rgba(16, 185, 129, 0.12)"
+                      : "rgba(15, 23, 42, 0.8)",
+                  border:
+                    activeAgent?.id === agent.id
+                      ? "1px solid rgba(52, 211, 153, 0.6)"
+                      : "1px solid rgba(148, 163, 184, 0.2)",
+                  borderRadius: 16,
+                  padding: 16,
+                  cursor: "pointer",
+                  transition: "border 0.2s ease, background 0.2s ease",
                 }}
+                onClick={() => handleSelectAgent(agent.id)}
               >
-                {agent.id}
-              </p>
+                <h3 style={{ fontSize: 16, fontWeight: 600 }}>{agent.name}</h3>
+                {isFeatured ? (
+                  <p
+                    style={{
+                      marginTop: 4,
+                      fontSize: 11,
+                      textTransform: "uppercase",
+                      letterSpacing: "0.2em",
+                      color: "#38bdf8",
+                    }}
+                  >
+                    Governance Suite
+                  </p>
+                ) : null}
+                <p style={{ marginTop: 6, fontSize: 13, color: "#94a3b8" }}>
+                  {agent.description}
+                </p>
+                <p
+                  style={{
+                    marginTop: 10,
+                    fontSize: 11,
+                    textTransform: "uppercase",
+                    letterSpacing: "0.2em",
+                    color: "#34d399",
+                  }}
+                >
+                  {agent.id}
+                </p>
 
               <div
                 ref={(node) => {
@@ -310,8 +356,9 @@ export default function MarketPage() {
                   </div>
                 </div>
               </div>
-            </div>
-          ))}
+              </div>
+            );
+          })}
         </section>
 
         <footer style={{ textAlign: "center", fontSize: 13, color: "#94a3b8" }}>
