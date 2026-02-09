@@ -60,7 +60,7 @@ export default function MarketPage() {
       if (!isMounted) return;
 
       if (orgError || !orgRow?.id) {
-        setStatus(orgError ? `Fehler: ${orgError.message}` : "Zasterix fehlt.");
+        setStatus(orgError ? `Error: ${orgError.message}` : "Zasterix missing.");
         setAgents([]);
         setIsLoadingAgents(false);
         return;
@@ -76,7 +76,7 @@ export default function MarketPage() {
       if (!isMounted) return;
 
       if (error) {
-        setStatus(`Fehler: ${error.message}`);
+        setStatus(`Error: ${error.message}`);
         setAgents([]);
         setIsLoadingAgents(false);
         return;
@@ -124,7 +124,7 @@ export default function MarketPage() {
     const trimmed = chatInput.trim();
     if (!trimmed) return;
     if (!activeAgent) {
-      setStatus("Bitte zuerst einen Agenten auswählen.");
+      setStatus("Please select an agent first.");
       return;
     }
 
@@ -141,18 +141,18 @@ export default function MarketPage() {
       });
       const data = await response.json();
       if (!response.ok) {
-        setStatus(data?.error ?? "Fehler beim Agenten-Aufruf.");
+        setStatus(data?.error ?? "Agent call failed.");
         return;
       }
       setMessages((prev) => [
         ...prev,
-        { role: "assistant", content: data.reply ?? "Antwort erhalten." },
+        { role: "assistant", content: data.reply ?? "Response received." },
         ...(data.feedback
           ? [{ role: "assistant", content: data.feedback } as ChatMessage]
           : []),
       ]);
     } catch (_error) {
-      setStatus("Netzwerkfehler beim Agenten-Aufruf.");
+      setStatus("Network error during agent call.");
     } finally {
       setIsSending(false);
     }
@@ -179,9 +179,9 @@ export default function MarketPage() {
           >
             Zasterix V2
           </p>
-          <h1 style={{ fontSize: 28, fontWeight: 600 }}>Agenten-Schaufenster</h1>
+          <h1 style={{ fontSize: 28, fontWeight: 600 }}>Agent Showroom</h1>
           <p style={{ fontSize: 14, color: "#94a3b8" }}>
-            Wähle einen Spezialisten, um den Chat zu starten.
+            Select a specialist to start the chat.
           </p>
         </header>
 
@@ -190,7 +190,7 @@ export default function MarketPage() {
         ) : null}
 
         {isLoadingAgents ? (
-          <p style={{ fontSize: 13, color: "#94a3b8" }}>Lade Agenten...</p>
+          <p style={{ fontSize: 13, color: "#94a3b8" }}>Loading agents...</p>
         ) : null}
 
         <section

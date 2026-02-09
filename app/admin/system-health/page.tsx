@@ -33,7 +33,7 @@ export default function SystemHealthPage() {
 
   useEffect(() => {
     if (!canUseSupabase) {
-      setStatus("Supabase-Umgebung fehlt.");
+      setStatus("Supabase environment missing.");
       setIsLoading(false);
       return;
     }
@@ -47,7 +47,7 @@ export default function SystemHealthPage() {
         .maybeSingle();
 
       if (orgError || !orgRow?.id) {
-        setStatus(orgError ? `Fehler: ${orgError.message}` : "Organisation fehlt.");
+        setStatus(orgError ? `Error: ${orgError.message}` : "Organization missing.");
         setAgents([]);
         setCapabilities([]);
         setIsLoading(false);
@@ -64,7 +64,7 @@ export default function SystemHealthPage() {
         .order("name", { ascending: true });
 
       if (error) {
-        setStatus(`Fehler: ${error.message}`);
+        setStatus(`Error: ${error.message}`);
         setAgents([]);
         setCapabilities([]);
         setIsLoading(false);
@@ -92,7 +92,7 @@ export default function SystemHealthPage() {
     <main style={{ padding: 24, maxWidth: 960, margin: "0 auto" }}>
       <h1 style={{ fontSize: 24, fontWeight: 600 }}>System Health</h1>
       <p style={{ marginTop: 6, color: "#64748b" }}>
-        Aktive Systemfaehigkeiten und Agentenstatus fuer Zasterix.
+        Active system capabilities and agent status for Zasterix.
       </p>
 
       {status ? (
@@ -100,16 +100,16 @@ export default function SystemHealthPage() {
       ) : null}
 
       {isLoading ? (
-        <p style={{ marginTop: 16, color: "#64748b" }}>Lade Daten...</p>
+        <p style={{ marginTop: 16, color: "#64748b" }}>Loading data...</p>
       ) : null}
 
       <section style={{ marginTop: 20, border: "1px solid #e2e8f0", padding: 16 }}>
         <h2 style={{ fontSize: 16, fontWeight: 600 }}>
-          Aktive Capabilities ({capabilities.length})
+          Active Capabilities ({capabilities.length})
         </h2>
         {capabilities.length === 0 ? (
           <p style={{ marginTop: 8, color: "#94a3b8" }}>
-            Keine aktiven Capabilities gefunden.
+            No active capabilities found.
           </p>
         ) : (
           <ul style={{ marginTop: 8, paddingLeft: 18 }}>
@@ -124,11 +124,11 @@ export default function SystemHealthPage() {
 
       <section style={{ marginTop: 20, border: "1px solid #e2e8f0", padding: 16 }}>
         <h2 style={{ fontSize: 16, fontWeight: 600 }}>
-          Agenten-Module ({agents.length})
+          Agent Modules ({agents.length})
         </h2>
         {agents.length === 0 ? (
           <p style={{ marginTop: 8, color: "#94a3b8" }}>
-            Keine Agenten gefunden.
+            No agents found.
           </p>
         ) : (
           <ul style={{ marginTop: 8, paddingLeft: 18 }}>
@@ -143,7 +143,7 @@ export default function SystemHealthPage() {
                   </div>
                 ) : (
                   <div style={{ marginTop: 4, color: "#94a3b8" }}>
-                    Keine Tools hinterlegt.
+                    No tools configured.
                   </div>
                 )}
               </li>

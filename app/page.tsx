@@ -195,7 +195,7 @@ export default function Page() {
       .order("name", { ascending: true });
 
     if (orgError) {
-      setStatusMessage(`Fehler: ${orgError.message}`);
+      setStatusMessage(`Error: ${orgError.message}`);
       setIsLoading(false);
       return;
     }
@@ -206,7 +206,7 @@ export default function Page() {
       .order("created_at", { ascending: true });
 
     if (agentError) {
-      setStatusMessage(`Fehler: ${agentError.message}`);
+      setStatusMessage(`Error: ${agentError.message}`);
       setIsLoading(false);
       return;
     }
@@ -362,7 +362,7 @@ export default function Page() {
 
   useEffect(() => {
     if (!canUseSupabase) {
-      setStatusMessage("Fehler: Supabase-Umgebung fehlt.");
+      setStatusMessage("Error: Supabase environment missing.");
       setIsLoading(false);
       return;
     }
@@ -427,7 +427,7 @@ export default function Page() {
   const handleHireAgent = async () => {
     if (!supabase) return;
     if (!factoryOrgId || !factoryName.trim() || !factoryPrompt.trim()) {
-      setStatusMessage("Bitte Organisation, Name und System-Prompt angeben.");
+      setStatusMessage("Please provide organization, name, and system prompt.");
       return;
     }
 
@@ -459,7 +459,7 @@ export default function Page() {
     });
 
     if (insertError) {
-      setStatusMessage(`Fehler: ${insertError.message}`);
+      setStatusMessage(`Error: ${insertError.message}`);
       setIsHiring(false);
       return;
     }
@@ -514,7 +514,7 @@ export default function Page() {
               Mission Control
             </a>
             <a className="hover:text-emerald-300" href="/admin/agents">
-              Agentenverwaltung
+              Agent Admin
             </a>
             <a className="hover:text-emerald-300" href="/admin/system-health">
               System Health
@@ -534,7 +534,7 @@ export default function Page() {
           </h2>
           {isLoading ? (
             <div className="rounded-2xl border border-slate-800/70 bg-slate-900/60 px-4 py-4 text-sm text-slate-300">
-              Lade Cluster...
+              Loading clusters...
             </div>
           ) : (
             <div className="grid gap-4 md:grid-cols-3">
@@ -548,7 +548,7 @@ export default function Page() {
                   </h3>
                   {cluster.organizations.length === 0 ? (
                     <p className="mt-3 text-xs text-slate-500">
-                      Keine Organisationen gefunden.
+                      No organizations found.
                     </p>
                   ) : (
                     <ul className="mt-3 space-y-3 text-xs text-slate-200">
@@ -556,8 +556,8 @@ export default function Page() {
                         <li key={org.id} className="rounded-xl bg-slate-950/40 p-3">
                           <div className="font-semibold">{org.name}</div>
                           <div className="mt-2 flex gap-3 text-[10px] uppercase tracking-[0.2em] text-slate-400">
-                            <span>Agenten: {org.totalAgents}</span>
-                            <span>Operativ: {org.operativeAgents}</span>
+                            <span>Agents: {org.totalAgents}</span>
+                            <span>Operative: {org.operativeAgents}</span>
                             <span>Showroom: {org.demoAgents}</span>
                           </div>
                         </li>
@@ -576,7 +576,7 @@ export default function Page() {
           </h2>
           {blueprintGroups.length === 0 ? (
             <div className="rounded-2xl border border-slate-800/70 bg-slate-900/60 px-4 py-4 text-sm text-slate-300">
-              Keine Blueprint-Zuordnungen gefunden.
+              No blueprint assignments found.
             </div>
           ) : (
             <div className="grid gap-4 md:grid-cols-2">
@@ -607,8 +607,7 @@ export default function Page() {
           )}
           {unclassifiedOrgs.length > 0 ? (
             <p className="text-xs text-slate-500">
-              Ohne Kategorie:{" "}
-              {unclassifiedOrgs.map((org) => org.name).join(", ")}
+              Unclassified: {unclassifiedOrgs.map((org) => org.name).join(", ")}
             </p>
           ) : null}
         </section>
@@ -619,31 +618,31 @@ export default function Page() {
               Agent Factory
             </h2>
             <p className="mt-2 text-sm text-slate-300">
-              Neue Agenten-Typen definieren und sofort einstellen.
+              Define new agent types and hire instantly.
             </p>
             <div className="mt-4 grid gap-3 text-sm">
               <input
                 className="rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100"
-                placeholder="Agenten-Name"
+                placeholder="Agent name"
                 value={factoryName}
                 onChange={(event) => setFactoryName(event.target.value)}
               />
               <input
                 className="rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100"
-                placeholder="Kurzbeschreibung"
+                placeholder="Short description"
                 value={factoryDescription}
                 onChange={(event) => setFactoryDescription(event.target.value)}
               />
               <textarea
                 className="rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100"
-                placeholder="System-Prompt"
+                placeholder="System prompt"
                 rows={4}
                 value={factoryPrompt}
                 onChange={(event) => setFactoryPrompt(event.target.value)}
               />
               <input
                 className="rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100"
-                placeholder="Tools (kommagetrennt)"
+                placeholder="Tools (comma-separated)"
                 value={factoryTools}
                 onChange={(event) => setFactoryTools(event.target.value)}
               />
@@ -652,7 +651,7 @@ export default function Page() {
                 value={factoryOrgId}
                 onChange={(event) => setFactoryOrgId(event.target.value)}
               >
-                <option value="">Organisation auswählen</option>
+                <option value="">Select organization</option>
                 {organizations.map((org) => (
                   <option key={org.id} value={org.id}>
                     {org.name}
@@ -665,7 +664,7 @@ export default function Page() {
                   checked={factoryShowroomCopy}
                   onChange={(event) => setFactoryShowroomCopy(event.target.checked)}
                 />
-                Showroom-Kopie anlegen
+                Create showroom copy
               </label>
               <button
                 type="button"
@@ -673,7 +672,7 @@ export default function Page() {
                 onClick={handleHireAgent}
                 disabled={isHiring}
               >
-                {isHiring ? "Stelle ein..." : "Agent einstellen"}
+                {isHiring ? "Hiring..." : "Hire agent"}
               </button>
             </div>
           </div>
@@ -683,7 +682,7 @@ export default function Page() {
               Live-Telemetrie
             </h2>
             <p className="mt-2 text-sm text-slate-300">
-              Echtzeit-Aktivitäten aus dem Meta-Netzwerk.
+              Real-time activity from the meta network.
             </p>
             <div className="mt-4 space-y-3 text-sm text-slate-200">
               {telemetry.length === 0

@@ -7,8 +7,8 @@ export const AGENT_BLUEPRINTS: Record<
   school: {
     label: "School",
     roles: [
-      "Didaktik-Experte",
-      "Lehrer-Agent",
+      "Didactics Expert",
+      "Teacher Agent",
       "Mentor",
       "Curriculum Designer",
       "Student Support",

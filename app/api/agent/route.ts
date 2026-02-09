@@ -35,6 +35,8 @@ const TOOL_REGISTRY = [
   { name: "create_corrective_task", status: "active" },
   { name: "create_task_from_feedback", status: "active" },
   { name: "create_task", status: "active" },
+  { name: "knowledge_vault_search", status: "active" },
+  { name: "knowledge_vault_upsert", status: "active" },
   { name: "get_system_capabilities", status: "active" },
   { name: "analyze_synergies", status: "active" },
   { name: "sync_context", status: "active" },
@@ -88,13 +90,54 @@ const analyzeSentiment = (text: string) => {
   };
 };
 
+const fetchKnowledgeVaultTemplates = async ({
+  supabase,
+  category,
+  limit = 5,
+}: {
+  supabase: ReturnType<typeof createClient>;
+  category: string;
+  limit?: number;
+}) => {
+  const normalized = category.trim();
+  if (!normalized) return [];
+  const { data, error } = await supabase
+    .from("knowledge_vault")
+    .select("id, title, content, category, verified_by_auditor, created_at")
+    .ilike("category", `%${normalized}%`)
+    .order("created_at", { ascending: false })
+    .limit(limit);
+
+  if (error) {
+    console.error("Agent API: knowledge_vault lookup failed:", error);
+    return [];
+  }
+
+  return data ?? [];
+};
+
 const TASK_ASSIGNMENT_RULES: Array<{ name: string; match: RegExp }> = [
-  { name: "Zasterix Growth Architect", match: /market|growth|pivot|gtm|go-to-market|validation|competitor|segmentation/i },
-  { name: "Zasterix CFO", match: /budget|finance|pricing|unit economics|roi|cost|margin|cash/i },
-  { name: "Zasterix CTO", match: /tech|architecture|infrastructure|platform|devops|integration/i },
-  { name: "Zasterix CMO", match: /marketing|brand|demand|campaign|positioning|messag/i },
-  { name: "Zasterix COO", match: /operations|process|delivery|execution|workflow|logistics/i },
-  { name: "Zasterix System Auditor", match: /compliance|audit|risk|security|policy/i },
+  {
+    name: "Growth",
+    match: /market|growth|pivot|gtm|go-to-market|validation|competitor|segmentation/i,
+  },
+  {
+    name: "CFO",
+    match: /budget|finance|pricing|unit economics|roi|cost|margin|cash/i,
+  },
+  {
+    name: "CTO",
+    match: /tech|architecture|infrastructure|platform|devops|integration/i,
+  },
+  {
+    name: "CMO",
+    match: /marketing|brand|demand|campaign|positioning|messag/i,
+  },
+  {
+    name: "COO",
+    match: /operations|process|delivery|execution|workflow|logistics/i,
+  },
+  { name: "Auditor", match: /compliance|audit|risk|security|policy/i },
 ];
 
 const selectAssignmentTarget = ({
@@ -1097,7 +1140,7 @@ const dispatchTool = async ({
     return {
       data: {
         task_id: data?.id ?? null,
-        message: "Korrektur-Task wurde erstellt.",
+        message: "Corrective task created.",
       },
     };
   }
@@ -1213,11 +1256,13 @@ const dispatchTool = async ({
       });
     }
 
-    if (tasksToCreate.length === 0) {
+    const limitedTasks = tasksToCreate.slice(0, 5);
+
+    if (limitedTasks.length === 0) {
       return { error: "create_task requires tasks or title/description" };
     }
 
-    const insertPayload = tasksToCreate.map((task) => ({
+    const insertPayload = limitedTasks.map((task) => ({
       title: task.title,
       description: task.description,
       priority: task.priority,
@@ -1250,7 +1295,7 @@ const dispatchTool = async ({
     for (let index = 0; index < (data ?? []).length; index += 1) {
       const taskRow = data?.[index];
       if (!taskRow) continue;
-      const taskInput = tasksToCreate[index];
+      const taskInput = limitedTasks[index];
       let agentId = taskRow.agent_id as string | null;
       let agentName = taskInput?.target_agent_name || null;
 
@@ -1279,6 +1324,17 @@ const dispatchTool = async ({
             status: "assigned",
           })
           .eq("id", taskRow.id);
+
+        await supabase.from("universal_history").insert({
+          payload: {
+            type: "task_assigned",
+            organization_id: orgId,
+            task_id: taskRow.id,
+            agent_id: agentId,
+            summary: taskRow.title,
+          },
+          organization_id: orgId,
+        });
       }
 
       assignments.push({
@@ -1302,7 +1358,7 @@ const dispatchTool = async ({
       data: {
         task_ids: (data ?? []).map((row: { id: string }) => row.id),
         assignments,
-        message: "Strategische Tasks wurden erstellt und verteilt.",
+        message: "Strategic tasks created and distributed.",
       },
     };
   }
@@ -1514,7 +1570,7 @@ const dispatchTool = async ({
     return {
       data: {
         task_id: data?.id ?? null,
-        message: "Feedback-Task wurde erstellt.",
+        message: "Feedback task created.",
         automation_note: automationNote,
       },
     };
@@ -1561,6 +1617,97 @@ const dispatchTool = async ({
 
   if (toolName === "tool_registry") {
     return { data: { tools: TOOL_REGISTRY } };
+  }
+
+  if (toolName === "knowledge_vault_search") {
+    const payload = tool.payload ?? {};
+    const category =
+      typeof payload.category === "string" ? payload.category.trim() : "";
+    const query =
+      typeof payload.query === "string" ? payload.query.trim() : "";
+    const verifiedOnly =
+      payload.verified_only === true || payload.verifiedOnly === true;
+    const limitRaw = payload.limit;
+    const limit =
+      typeof limitRaw === "number" && Number.isFinite(limitRaw)
+        ? Math.min(Math.max(Math.floor(limitRaw), 1), 25)
+        : 10;
+
+    let queryBuilder = supabase
+      .from("knowledge_vault")
+      .select("id, title, content, category, verified_by_auditor, created_at")
+      .order("created_at", { ascending: false })
+      .limit(limit);
+
+    if (category) {
+      queryBuilder = queryBuilder.ilike("category", `%${category}%`);
+    }
+    if (query) {
+      queryBuilder = queryBuilder.ilike("title", `%${query}%`);
+    }
+    if (verifiedOnly) {
+      queryBuilder = queryBuilder.eq("verified_by_auditor", true);
+    }
+
+    const { data, error } = await queryBuilder;
+    if (error) {
+      return { error: error.message };
+    }
+    return { data };
+  }
+
+  if (toolName === "knowledge_vault_upsert") {
+    const payload = tool.payload ?? {};
+    const title =
+      typeof payload.title === "string"
+        ? payload.title.trim()
+        : typeof payload.summary === "string"
+          ? payload.summary.trim()
+          : "";
+    const category =
+      typeof payload.category === "string" ? payload.category.trim() : "";
+    const verifiedByAuditor =
+      typeof payload.verified_by_auditor === "boolean"
+        ? payload.verified_by_auditor
+        : typeof payload.verifiedByAuditor === "boolean"
+          ? payload.verifiedByAuditor
+          : false;
+    const content =
+      payload.content && typeof payload.content === "object"
+        ? payload.content
+        : typeof payload.content === "string"
+          ? { text: payload.content }
+          : typeof payload.details === "string"
+            ? { text: payload.details }
+            : typeof payload.text === "string"
+              ? { text: payload.text }
+              : null;
+
+    if (!title || !category || !content) {
+      return { error: "knowledge_vault_upsert requires title, category, content" };
+    }
+
+    const { data, error } = await supabase
+      .from("knowledge_vault")
+      .insert({
+        title,
+        content,
+        category,
+        verified_by_auditor: verifiedByAuditor,
+      })
+      .select("id")
+      .maybeSingle();
+
+    if (error) {
+      return { error: error.message };
+    }
+
+    return {
+      data: {
+        id: data?.id ?? null,
+        message: "Knowledge vault entry created.",
+      },
+    };
   }
 
   if (toolName === "get_system_capabilities") {
@@ -2047,11 +2194,21 @@ const dispatchTool = async ({
     });
 
     const blueprint = AGENT_BLUEPRINTS[organizationCategory];
+    const vaultTemplates = await fetchKnowledgeVaultTemplates({
+      supabase,
+      category: blueprint.label,
+      limit: 5,
+    });
+    const vaultContext = vaultTemplates.length
+      ? `Reference knowledge vault templates:\n${vaultTemplates
+          .map((entry: { title: string }) => `- ${entry.title}`)
+          .join("\n")}`
+      : "";
     const blueprintAgents: Array<{ name: string; role: string; id: string | null }> =
       [];
     for (const role of blueprint.roles) {
       const agentName = `${companyName} ${role}`;
-      const agentPrompt = `You are the ${role} for ${companyName}. Deliver concise, actionable output aligned with a ${blueprint.label} organization.`;
+      const agentPrompt = `You are the ${role} for ${companyName}. Deliver concise, actionable output aligned with a ${blueprint.label} organization.${vaultContext ? `\n\n${vaultContext}` : ""}`;
       const agentId = await ensureAgentTemplate({
         supabase,
         organizationId: orgId,
@@ -2092,6 +2249,13 @@ const dispatchTool = async ({
       employees,
       created_agents: createdAgents,
       created_blueprint_agents: blueprintAgents,
+      knowledge_vault_templates: vaultTemplates.map(
+        (entry: { id: string; title: string; category: string }) => ({
+          id: entry.id,
+          title: entry.title,
+          category: entry.category,
+        }),
+      ),
     };
 
     await supabase
@@ -2102,7 +2266,7 @@ const dispatchTool = async ({
       data: {
         organization_id: orgId,
         message:
-          "Agent-Delegation gestartet: Für jeden Mitarbeiter wird ein spezialisierter KI-Helfer erstellt.",
+          "Delegation started: Each employee will receive a specialized AI helper.",
         created_agents: createdAgents,
         created_blueprint_agents: blueprintAgents,
         organization_category: organizationCategory,

@@ -43,6 +43,8 @@ const TOOL_OPTIONS = [
   { value: "create_corrective_task", label: "create_corrective_task" },
   { value: "create_task_from_feedback", label: "create_task_from_feedback" },
   { value: "create_task", label: "create_task" },
+  { value: "knowledge_vault_search", label: "knowledge_vault_search" },
+  { value: "knowledge_vault_upsert", label: "knowledge_vault_upsert" },
   { value: "get_system_capabilities", label: "get_system_capabilities" },
   { value: "analyze_synergies", label: "analyze_synergies" },
   { value: "sync_context", label: "sync_context" },
@@ -78,7 +80,7 @@ export default function AdminAgentsPage() {
       .order("created_at", { ascending: true });
 
     if (error) {
-      setStatus(`Fehler: ${error.message}`);
+      setStatus(`Error: ${error.message}`);
       setAgents([]);
       setIsLoading(false);
       return;
@@ -91,7 +93,7 @@ export default function AdminAgentsPage() {
 
   useEffect(() => {
     if (!canUseSupabase) {
-      setStatus("Supabase-Umgebung fehlt.");
+      setStatus("Supabase environment missing.");
       setIsLoading(false);
       return;
     }
@@ -103,7 +105,7 @@ export default function AdminAgentsPage() {
         .maybeSingle();
 
       if (orgError) {
-        setStatus(`Fehler: ${orgError.message}`);
+        setStatus(`Error: ${orgError.message}`);
       } else if (orgRow?.id) {
         setOrganizationId(orgRow.id);
       }
@@ -117,7 +119,7 @@ export default function AdminAgentsPage() {
   const handleCreate = async () => {
     if (!supabase) return;
     if (!newAgent.name.trim() || !newAgent.system_prompt.trim()) {
-      setStatus("Name und system_prompt sind erforderlich.");
+      setStatus("Name and system_prompt are required.");
       return;
     }
     setIsSaving(true);
@@ -130,7 +132,7 @@ export default function AdminAgentsPage() {
     });
 
     if (error) {
-      setStatus(`Fehler: ${error.message}`);
+      setStatus(`Error: ${error.message}`);
       setIsSaving(false);
       return;
     }
@@ -150,7 +152,7 @@ export default function AdminAgentsPage() {
     if (!supabase) return;
     const { error } = await supabase.from("agent_templates").delete().eq("id", id);
     if (error) {
-      setStatus(`Fehler: ${error.message}`);
+      setStatus(`Error: ${error.message}`);
       return;
     }
     await loadAgents();
@@ -175,7 +177,7 @@ export default function AdminAgentsPage() {
     const draft = drafts[id];
     if (!draft) return;
     if (!draft.name.trim() || !draft.system_prompt.trim()) {
-      setStatus("Name und system_prompt sind erforderlich.");
+      setStatus("Name and system_prompt are required.");
       return;
     }
     const { error } = await supabase
@@ -189,7 +191,7 @@ export default function AdminAgentsPage() {
       .eq("id", id);
 
     if (error) {
-      setStatus(`Fehler: ${error.message}`);
+      setStatus(`Error: ${error.message}`);
       return;
     }
     setDrafts((prev) => {
@@ -202,10 +204,10 @@ export default function AdminAgentsPage() {
 
   return (
     <main style={{ padding: 24, maxWidth: 960, margin: "0 auto" }}>
-      <h1 style={{ fontSize: 24, fontWeight: 600 }}>Agentenverwaltung</h1>
+      <h1 style={{ fontSize: 24, fontWeight: 600 }}>Agent Administration</h1>
       <p style={{ marginTop: 6 }}>
         <a href="/admin/system-health" style={{ color: "#2563eb" }}>
-          System Health anzeigen
+          View System Health
         </a>
       </p>
       {status ? (
@@ -213,7 +215,7 @@ export default function AdminAgentsPage() {
       ) : null}
 
       <section style={{ marginTop: 20, border: "1px solid #e2e8f0", padding: 16 }}>
-        <h2 style={{ fontSize: 16, fontWeight: 600 }}>Neuen Agenten anlegen</h2>
+        <h2 style={{ fontSize: 16, fontWeight: 600 }}>Create new agent</h2>
         <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
           <input
             placeholder="Name"
@@ -224,7 +226,7 @@ export default function AdminAgentsPage() {
             style={{ padding: 8, border: "1px solid #cbd5f5", borderRadius: 8 }}
           />
           <input
-            placeholder="Beschreibung"
+            placeholder="Description"
             value={newAgent.description}
             onChange={(event) =>
               setNewAgent((prev) => ({ ...prev, description: event.target.value }))
@@ -233,7 +235,7 @@ export default function AdminAgentsPage() {
           />
           <textarea
             rows={4}
-            placeholder="System Prompt"
+            placeholder="System prompt"
             value={newAgent.system_prompt}
             onChange={(event) =>
               setNewAgent((prev) => ({
@@ -284,15 +286,15 @@ export default function AdminAgentsPage() {
               cursor: "pointer",
             }}
           >
-            {isSaving ? "Speichern..." : "Agent speichern"}
+            {isSaving ? "Saving..." : "Save agent"}
           </button>
         </div>
       </section>
 
       <section style={{ marginTop: 24 }}>
-        <h2 style={{ fontSize: 16, fontWeight: 600 }}>Bestehende Agenten</h2>
+        <h2 style={{ fontSize: 16, fontWeight: 600 }}>Existing agents</h2>
         {isLoading ? (
-          <p style={{ marginTop: 10, color: "#64748b" }}>Lade Agenten...</p>
+          <p style={{ marginTop: 10, color: "#64748b" }}>Loading agents...</p>
         ) : null}
         <div style={{ marginTop: 12, display: "grid", gap: 12 }}>
           {agents.map((agent) => {
@@ -393,7 +395,7 @@ export default function AdminAgentsPage() {
                           color: "#fff",
                         }}
                       >
-                        Speichern
+                        Save
                       </button>
                       <button
                         type="button"
@@ -433,7 +435,7 @@ export default function AdminAgentsPage() {
                         : "keine"}
                     </p>
                     <p style={{ fontSize: 12, color: "#94a3b8" }}>
-                      Org-ID: {agent.organization_id ?? "Zasterix (default)"}
+                      Org ID: {agent.organization_id ?? "Zasterix (default)"}
                     </p>
                     <div style={{ display: "flex", gap: 8 }}>
                       <button
@@ -447,7 +449,7 @@ export default function AdminAgentsPage() {
                           color: "#0f172a",
                         }}
                       >
-                        Bearbeiten
+                        Edit
                       </button>
                       <button
                         type="button"

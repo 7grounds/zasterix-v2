@@ -38,11 +38,11 @@ type ActivityEntry = {
 };
 
 const STATUS_LABELS: Record<string, string> = {
-  open: "Offen",
-  assigned: "Zugewiesen",
-  processing: "In Arbeit",
-  completed: "Abgeschlossen",
-  failed: "Fehler",
+  open: "Open",
+  assigned: "Assigned",
+  processing: "In Progress",
+  completed: "Completed",
+  failed: "Failed",
 };
 
 export default function CommandCenterPage() {
@@ -77,7 +77,7 @@ export default function CommandCenterPage() {
       .maybeSingle();
 
     if (orgError || !orgRow?.id) {
-      setStatus(orgError ? `Fehler: ${orgError.message}` : "Zasterix fehlt.");
+      setStatus(orgError ? `Error: ${orgError.message}` : "Zasterix missing.");
       setIsLoading(false);
       return;
     }
@@ -89,7 +89,7 @@ export default function CommandCenterPage() {
       .order("created_at", { ascending: true });
 
     if (agentError) {
-      setStatus(`Fehler: ${agentError.message}`);
+      setStatus(`Error: ${agentError.message}`);
       setIsLoading(false);
       return;
     }
@@ -120,6 +120,27 @@ export default function CommandCenterPage() {
 
     setTasks((taskRows ?? []) as TaskRow[]);
 
+    const { data: missionRow } = await supabase
+      .from("organizations")
+      .select("mission, mission_text, mission_updated_at")
+      .eq("id", org.id)
+      .maybeSingle();
+
+    if (missionRow?.mission_updated_at && missionRow.mission_updated_at !== org.mission_updated_at) {
+      const missionValue = missionRow.mission ?? missionRow.mission_text ?? "";
+      setOrg((prev) =>
+        prev
+          ? {
+              ...prev,
+              mission: missionRow.mission ?? prev.mission ?? null,
+              mission_text: missionRow.mission_text ?? prev.mission_text ?? null,
+              mission_updated_at: missionRow.mission_updated_at,
+            }
+          : prev,
+      );
+      setMissionInput(missionValue);
+    }
+
     const { data: activityRows } = await supabase
       .from("universal_history")
       .select("id, payload, created_at")
@@ -138,32 +159,34 @@ export default function CommandCenterPage() {
           const count = Array.isArray(payload.assignments)
             ? payload.assignments.length
             : payload.tasks_created ?? 0;
-          message = `Integrator hat Strategie-Papier an ${count} Agenten verteilt.`;
+          message = `Integrator distributed strategy brief to ${count} agents.`;
           integratorItems.push({
             id: `integrator-${row.id}`,
             message,
             timestamp: row.created_at,
           });
         } else if (type === "task_assigned") {
-          message = `Task zugewiesen: ${String(payload.summary ?? "")}`;
+          message = `Task assigned: ${String(payload.summary ?? "")}`;
           integratorItems.push({
             id: `integrator-${row.id}`,
             message,
             timestamp: row.created_at,
           });
         } else if (type === "strategy_sync") {
-          message = `Integrator synchronisiert Kontext.`;
+          message = `Integrator synced context.`;
           integratorItems.push({
             id: `integrator-${row.id}`,
             message,
             timestamp: row.created_at,
           });
         } else if (type === "feedback_task_created") {
-          message = `Sentinel hat Feedback-Task erstellt.`;
+          message = `Sentinel created a feedback task.`;
         } else if (type === "operative_task_completed") {
-          message = `Operativer Task abgeschlossen.`;
+          message = `Operative task completed.`;
         } else if (type === "mission_ack") {
-          message = `Sentinel bestätigt Missionseingang.`;
+          message = payload.message
+            ? String(payload.message)
+            : "Sentinel acknowledged mission intake.";
         }
 
         if (message) {
@@ -182,7 +205,7 @@ export default function CommandCenterPage() {
 
   useEffect(() => {
     if (!canUseSupabase) {
-      setStatus("Supabase-Umgebung fehlt.");
+      setStatus("Supabase environment missing.");
       setIsLoading(false);
       return;
     }
@@ -220,14 +243,14 @@ export default function CommandCenterPage() {
       .from("agent_templates")
       .select("id")
       .eq("organization_id", org.id)
-      .in("name", ["Zasterix CEO", "Zasterix CEO: The Essence Keeper"])
+      .ilike("name", "%CEO%")
       .eq("is_operative", true)
       .order("created_at", { ascending: true })
       .limit(1)
       .maybeSingle();
 
     if (!ceoRow?.id) {
-      setStatus("CEO Agent nicht gefunden.");
+      setStatus("CEO agent not found.");
       return;
     }
 
@@ -237,7 +260,7 @@ export default function CommandCenterPage() {
       body: JSON.stringify({
         agentId: ceoRow.id,
         organizationName: "Zasterix",
-        message: `Globale Mission:\n${mission}\n\nErstelle 3-5 strategische Meilensteine (Growth, Finance, Tech). Antworte ausschließlich mit einem Tool-Aufruf im Format [USE_TOOL: create_task | payload: {...}] und nutze das Feld tasks mit 3-5 Einträgen (title, description, priority). Weisen den Tasks nach Möglichkeit agent_name zu (Growth Architect, CFO, CTO).`,
+        message: `Global Mission:\n${mission}\n\nCreate 3-5 strategic milestones (Growth, Finance, Tech). Respond ONLY with a tool call in the format [USE_TOOL: create_task | payload: {...}] and include a tasks array with 3-5 entries (title, description, priority). Assign agent_name where possible (Growth, CFO, CTO).`,
       }),
     });
   };
@@ -248,13 +271,13 @@ export default function CommandCenterPage() {
       .from("agent_templates")
       .select("id")
       .eq("organization_id", org.id)
-      .eq("name", "Zasterix Sentinel")
+      .ilike("name", "%Sentinel%")
       .eq("is_operative", true)
       .order("created_at", { ascending: true })
       .limit(1)
       .maybeSingle();
 
-    let ackMessage = "Sentinel bestätigt den Missionseingang.";
+    let ackMessage = "Sentinel confirmed mission intake.";
 
     if (sentinelRow?.id) {
       try {
@@ -264,7 +287,7 @@ export default function CommandCenterPage() {
           body: JSON.stringify({
             agentId: sentinelRow.id,
             organizationName: "Zasterix",
-            message: `Mission eingegangen:\n${mission}\n\nFormuliere eine kurze Eingangsbestätigung für den Chairman (1-2 Sätze).`,
+            message: `Mission received:\n${mission}\n\nProvide a short acknowledgement for the Chairman (1-2 sentences).`,
           }),
         });
         const data = await response.json();
@@ -272,7 +295,7 @@ export default function CommandCenterPage() {
           ackMessage = data.reply;
         }
       } catch (_error) {
-        ackMessage = "Sentinel konnte keine Bestätigung erzeugen.";
+        ackMessage = "Sentinel could not generate an acknowledgement.";
       }
     }
 
@@ -295,7 +318,7 @@ export default function CommandCenterPage() {
     if (!supabase || !org?.id) return;
     const trimmed = missionInput.trim();
     if (!trimmed) {
-      setStatus("Bitte eine Mission eingeben.");
+      setStatus("Please enter a mission.");
       return;
     }
 
@@ -311,7 +334,7 @@ export default function CommandCenterPage() {
       .eq("id", org.id);
 
     if (error) {
-      setStatus(`Fehler: ${error.message}`);
+      setStatus(`Error: ${error.message}`);
       setIsSaving(false);
       return;
     }
@@ -342,7 +365,7 @@ export default function CommandCenterPage() {
           </p>
           <h1 className="text-2xl font-semibold">Mission Control</h1>
           <p className="text-sm text-slate-400">
-            Missionen steuern und autonome Task-Verteilung überwachen.
+            Orchestrate missions and monitor autonomous task distribution.
           </p>
         </header>
 
@@ -354,24 +377,24 @@ export default function CommandCenterPage() {
 
         <section className="rounded-2xl border border-slate-800/70 bg-slate-900/60 px-5 py-5">
           <h2 className="text-sm uppercase tracking-[0.3em] text-slate-400">
-            Aktive Mission
+            Active Mission
           </h2>
-          <p className="mt-2 text-sm text-slate-200 whitespace-pre-wrap">
-            {org?.mission ?? org?.mission_text ?? "Noch keine Mission hinterlegt."}
+          <p className="mt-2 whitespace-pre-wrap text-sm text-slate-200">
+            {org?.mission ?? org?.mission_text ?? "No mission saved yet."}
           </p>
         </section>
 
         <section className="rounded-2xl border border-slate-800/70 bg-slate-900/60 px-5 py-5">
           <h2 className="text-sm uppercase tracking-[0.3em] text-slate-400">
-            Globale Mission / Impuls
+            Global Mission / Input
           </h2>
           <p className="mt-2 text-sm text-slate-300">
-            Der aktuelle Impuls wird gespeichert und triggert die CEO-Analyse.
+            Saving this input triggers the CEO analysis.
           </p>
           <textarea
             className="mt-4 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-3 text-sm text-slate-100"
             rows={4}
-            placeholder="Mission eingeben..."
+            placeholder="Enter mission..."
             value={missionInput}
             onChange={(event) => setMissionInput(event.target.value)}
             disabled={isLoading}
@@ -383,11 +406,11 @@ export default function CommandCenterPage() {
               onClick={handleSaveMission}
               disabled={isSaving || isLoading}
             >
-              {isSaving ? "Speichere..." : "Mission speichern"}
+              {isSaving ? "Saving..." : "Save mission"}
             </button>
             {org?.mission_updated_at ? (
               <span>
-                Letztes Update: {new Date(org.mission_updated_at).toLocaleString()}
+                Last update: {new Date(org.mission_updated_at).toLocaleString()}
               </span>
             ) : null}
           </div>
@@ -398,7 +421,7 @@ export default function CommandCenterPage() {
             Task Wall
           </h2>
           {tasks.length === 0 ? (
-            <p className="mt-3 text-sm text-slate-400">Keine Tasks gefunden.</p>
+            <p className="mt-3 text-sm text-slate-400">No tasks found.</p>
           ) : (
             <div className="mt-4 grid gap-3 md:grid-cols-2">
               {tasks.map((task) => {
@@ -425,11 +448,11 @@ export default function CommandCenterPage() {
         <section className="grid gap-4 md:grid-cols-2">
           <div className="rounded-2xl border border-slate-800/70 bg-slate-900/60 px-5 py-5">
             <h2 className="text-sm uppercase tracking-[0.3em] text-slate-400">
-              Agenten-Aktivität
+              Agent Activity
             </h2>
             {activity.length === 0 ? (
               <p className="mt-3 text-sm text-slate-400">
-                Noch keine Aktivität erfasst.
+                No activity captured yet.
               </p>
             ) : (
               <ul className="mt-3 space-y-3 text-sm text-slate-200">
@@ -452,11 +475,11 @@ export default function CommandCenterPage() {
 
           <div className="rounded-2xl border border-slate-800/70 bg-slate-900/60 px-5 py-5">
             <h2 className="text-sm uppercase tracking-[0.3em] text-slate-400">
-              Integrator-Log
+              Integrator Log
             </h2>
             {integratorLog.length === 0 ? (
               <p className="mt-3 text-sm text-slate-400">
-                Noch kein Hintergrund-Rauschen erfasst.
+                No background noise captured yet.
               </p>
             ) : (
               <ul className="mt-3 space-y-3 text-sm text-slate-200">
