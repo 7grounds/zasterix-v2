@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
+import { createBrowserClient } from "@supabase/auth-helpers-nextjs";
 import {
   AGENT_BLUEPRINTS,
   ORGANIZATION_CATEGORY_LABELS,
@@ -104,7 +104,10 @@ const FALLBACK_TELEMETRY = [
 ];
 
 export default function Page() {
-  const supabase = useMemo(() => createClientComponentClient(), []);
+  const supabase = useMemo(() => {
+    if (!supabaseUrl || !supabaseAnonKey) return null;
+    return createBrowserClient(supabaseUrl, supabaseAnonKey);
+  }, []);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [clusters, setClusters] = useState<ClusterView[]>([]);
   const [organizations, setOrganizations] = useState<OrgRow[]>([]);

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { createMiddlewareClient } from "@supabase/auth-helpers-nextjs";
+import { createServerClient } from "@supabase/auth-helpers-nextjs";
 
 const isPublicPath = (pathname: string) => {
   return (
@@ -12,10 +12,27 @@ const isPublicPath = (pathname: string) => {
 
 export async function middleware(req: NextRequest) {
   const res = NextResponse.next();
-  const supabase = createMiddlewareClient({ req, res });
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
+  const supabaseKey =
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ??
+    process.env.SUPABASE_SERVICE_ROLE_KEY ??
+    "";
+  if (!supabaseUrl || !supabaseKey) {
+    return res;
+  }
+  const supabase = createServerClient(supabaseUrl, supabaseKey, {
+    cookies: {
+      getAll: () => req.cookies.getAll(),
+      setAll: (cookies) => {
+        cookies.forEach(({ name, value, options }) => {
+          res.cookies.set(name, value, options);
+        });
+      },
+    },
+  });
   const {
-    data: { session },
-  } = await supabase.auth.getSession();
+    data: { user },
+  } = await supabase.auth.getUser();
 
   const pathname = req.nextUrl.pathname;
   if (isPublicPath(pathname)) {
@@ -27,9 +44,8 @@ export async function middleware(req: NextRequest) {
     process.env.NEXT_PUBLIC_CHAIRMAN_EMAIL?.toLowerCase().trim() ??
     "";
 
-  const userEmail = session?.user?.email?.toLowerCase();
-  const isAuthorized =
-    Boolean(session?.user) && (!allowedEmail || userEmail === allowedEmail);
+  const userEmail = user?.email?.toLowerCase();
+  const isAuthorized = Boolean(user) && (!allowedEmail || userEmail === allowedEmail);
 
   if (!isAuthorized) {
     if (pathname.startsWith("/api")) {

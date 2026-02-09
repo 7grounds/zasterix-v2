@@ -2,7 +2,10 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
+import { createBrowserClient } from "@supabase/auth-helpers-nextjs";
+
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "";
 
 const ALLOWED_EMAIL =
   process.env.NEXT_PUBLIC_CHAIRMAN_EMAIL?.toLowerCase().trim() ?? "";
@@ -10,7 +13,10 @@ const ALLOWED_EMAIL =
 export default function LoginPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const supabase = useMemo(() => createClientComponentClient(), []);
+  const supabase = useMemo(() => {
+    if (!supabaseUrl || !supabaseAnonKey) return null;
+    return createBrowserClient(supabaseUrl, supabaseAnonKey);
+  }, []);
   const [email, setEmail] = useState("");
   const [status, setStatus] = useState<string | null>(null);
   const [isSending, setIsSending] = useState(false);
@@ -19,6 +25,13 @@ export default function LoginPage() {
   useEffect(() => {
     let isMounted = true;
     const checkSession = async () => {
+      if (!supabase) {
+        if (isMounted) {
+          setStatus("Supabase environment missing.");
+          setIsLoading(false);
+        }
+        return;
+      }
       const { data } = await supabase.auth.getSession();
       if (!isMounted) return;
       if (data.session?.user) {
@@ -48,6 +61,11 @@ export default function LoginPage() {
     setStatus(null);
 
     const redirectTo = `${window.location.origin}/admin/command-center`;
+    if (!supabase) {
+      setStatus("Supabase environment missing.");
+      return;
+    }
+
     const { error } = await supabase.auth.signInWithOtp({
       email: trimmed,
       options: { emailRedirectTo: redirectTo },
