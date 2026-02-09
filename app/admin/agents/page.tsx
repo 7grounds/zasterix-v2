@@ -35,6 +35,7 @@ const TOOL_OPTIONS = [
   { value: "agent_call", label: "agent_call" },
   { value: "generate_agent_definition", label: "generate_agent_definition" },
   { value: "process_enterprise_list", label: "process_enterprise_list" },
+  { value: "universal_history", label: "universal_history" },
 ];
 
 export default function AdminAgentsPage() {

@@ -730,6 +730,47 @@ const dispatchTool = async ({
     return { data };
   }
 
+  if (toolName === "universal_history") {
+    const payload = tool.payload ?? {};
+    const limitRaw = payload.limit;
+    const limit =
+      typeof limitRaw === "number" && Number.isFinite(limitRaw)
+        ? Math.min(Math.max(Math.floor(limitRaw), 1), 25)
+        : 10;
+    const type =
+      typeof payload.type === "string" ? payload.type.trim() : "";
+    const sessionFilter =
+      typeof payload.session_id === "string" ? payload.session_id.trim() : "";
+    const orgId =
+      typeof payload.organization_id === "string"
+        ? payload.organization_id.trim()
+        : organizationId ?? "";
+
+    if (!orgId) {
+      return { error: "universal_history requires organization_id" };
+    }
+
+    let query = supabase
+      .from("universal_history")
+      .select("id, payload, created_at, organization_id")
+      .eq("organization_id", orgId)
+      .order("created_at", { ascending: false })
+      .limit(limit);
+
+    if (type) {
+      query = query.eq("payload->>type", type);
+    }
+    if (sessionFilter) {
+      query = query.eq("payload->>session_id", sessionFilter);
+    }
+
+    const { data, error } = await query;
+    if (error) {
+      return { error: error.message };
+    }
+    return { data };
+  }
+
   if (toolName === "external_search") {
     return { error: "external_search not configured" };
   }
