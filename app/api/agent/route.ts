@@ -4,7 +4,7 @@ import {
   type OrganizationCategory,
 } from "../../../lib/agent_blueprints";
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 type AgentRequest = {
   agentId?: string;
@@ -19,8 +19,37 @@ type AgentRequest = {
 
 const OPENAI_MODEL = "gpt-4o";
 
-type SupabaseClientLike = {
-  from: (table: string) => any;
+type Json =
+  | string
+  | number
+  | boolean
+  | null
+  | { [key: string]: Json }
+  | Json[];
+
+type TableShape = {
+  Row: Record<string, Json>;
+  Insert: Record<string, Json>;
+  Update: Record<string, Json>;
+};
+
+type Database = {
+  public: {
+    Tables: {
+      agent_templates: TableShape;
+      organizations: TableShape;
+      universal_history: TableShape;
+      user_progress: TableShape;
+      user_asset_history: TableShape;
+      tasks: TableShape;
+      operative_tasks: TableShape;
+      knowledge_vault: TableShape;
+    };
+    Views: Record<string, never>;
+    Functions: Record<string, never>;
+    Enums: Record<string, never>;
+    CompositeTypes: Record<string, never>;
+  };
 };
 
 const TOOL_REGISTRY = [
@@ -99,7 +128,7 @@ const fetchKnowledgeVaultTemplates = async ({
   category,
   limit = 5,
 }: {
-  supabase: SupabaseClientLike;
+  supabase: SupabaseClient<Database>;
   category: string;
   limit?: number;
 }) => {
@@ -196,7 +225,7 @@ const resolveOrganizationId = async ({
   organizationName,
   subOrganization,
 }: {
-  supabase: SupabaseClientLike;
+  supabase: SupabaseClient<Database>;
   organizationName?: string;
   subOrganization?: string;
 }) => {
@@ -506,7 +535,7 @@ const resolveOrganizationRecord = async ({
   supabase,
   name,
 }: {
-  supabase: SupabaseClientLike;
+  supabase: SupabaseClient<Database>;
   name: string;
 }) => {
   const resolvedName = name.trim();
@@ -552,7 +581,7 @@ const ensureAgentTemplate = async ({
   isOperative,
   ownerUserId,
 }: {
-  supabase: SupabaseClientLike;
+  supabase: SupabaseClient<Database>;
   organizationId: string;
   parentId?: string | null;
   name: string;
@@ -602,7 +631,7 @@ const resolveAgentIdByName = async ({
   name,
   preferOperative = true,
 }: {
-  supabase: SupabaseClientLike;
+  supabase: SupabaseClient<Database>;
   organizationId: string;
   name: string;
   preferOperative?: boolean;
@@ -723,7 +752,7 @@ const normalizeOrganizationCategory = (
 };
 
 const fetchAgentHierarchy = async (
-  supabase: SupabaseClientLike,
+  supabase: SupabaseClient<Database>,
 ) => {
   const { data, error } = await supabase
     .from("agent_templates")
@@ -805,7 +834,7 @@ const isNavigator = (agent: { name: string; system_prompt: string }) => {
   );
 };
 
-const buildAgentDirectory = async (supabase: SupabaseClientLike) => {
+const buildAgentDirectory = async (supabase: SupabaseClient<Database>) => {
   const { data, error } = await supabase
     .from("agent_templates")
     .select("id, name")
@@ -830,7 +859,7 @@ const updateSessionState = async ({
   contextNote,
   organizationId,
 }: {
-  supabase: SupabaseClientLike;
+  supabase: SupabaseClient<Database>;
   sessionId: string;
   targetAgent: { id: string; name: string };
   contextNote?: string;
@@ -888,7 +917,7 @@ const dispatchTool = async ({
   openAiKey,
   organizationId,
 }: {
-  supabase: SupabaseClientLike;
+  supabase: SupabaseClient<Database>;
   tool: ToolCall;
   userId?: string;
   stageId?: string;
@@ -2404,7 +2433,7 @@ export async function POST(req: Request) {
     );
   }
 
-  const supabase = createClient(url, key, {
+  const supabase = createClient<Database>(url, key, {
     auth: { persistSession: false },
   });
 
