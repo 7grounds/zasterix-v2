@@ -16,6 +16,7 @@ type AgentRow = {
   description: string;
   system_prompt: string;
   allowed_tools?: string[] | null;
+  organization_id?: string | null;
   created_at?: string | null;
 };
 
@@ -40,6 +41,7 @@ export default function AdminAgentsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
+  const [organizationId, setOrganizationId] = useState<string | null>(null);
   const [newAgent, setNewAgent] = useState<Draft>({
     name: "",
     description: "",
@@ -57,7 +59,9 @@ export default function AdminAgentsPage() {
     setIsLoading(true);
     const { data, error } = await supabase
       .from("agent_templates")
-      .select("id, name, description, system_prompt, allowed_tools, created_at")
+      .select(
+        "id, name, description, system_prompt, allowed_tools, organization_id, created_at",
+      )
       .order("created_at", { ascending: true });
 
     if (error) {
@@ -78,7 +82,23 @@ export default function AdminAgentsPage() {
       setIsLoading(false);
       return;
     }
-    loadAgents();
+    const loadOrgAndAgents = async () => {
+      const { data: orgRow, error: orgError } = await supabase
+        .from("organizations")
+        .select("id")
+        .eq("name", "Zasterix")
+        .maybeSingle();
+
+      if (orgError) {
+        setStatus(`Fehler: ${orgError.message}`);
+      } else if (orgRow?.id) {
+        setOrganizationId(orgRow.id);
+      }
+
+      await loadAgents();
+    };
+
+    loadOrgAndAgents();
   }, [canUseSupabase]);
 
   const handleCreate = async () => {
@@ -93,6 +113,7 @@ export default function AdminAgentsPage() {
       description: newAgent.description.trim(),
       system_prompt: newAgent.system_prompt.trim(),
       allowed_tools: newAgent.allowed_tools,
+      organization_id: organizationId ?? undefined,
     });
 
     if (error) {
@@ -392,6 +413,9 @@ export default function AdminAgentsPage() {
                       agent.allowed_tools.length > 0
                         ? agent.allowed_tools.join(", ")
                         : "keine"}
+                    </p>
+                    <p style={{ fontSize: 12, color: "#94a3b8" }}>
+                      Org-ID: {agent.organization_id ?? "Zasterix (default)"}
                     </p>
                     <div style={{ display: "flex", gap: 8 }}>
                       <button

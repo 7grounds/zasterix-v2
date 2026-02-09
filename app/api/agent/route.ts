@@ -9,6 +9,8 @@ type AgentRequest = {
   stageId?: string;
   moduleId?: string;
   sessionId?: string;
+  organizationName?: string;
+  subOrganization?: string;
 };
 
 const OPENAI_MODEL = "gpt-4o";
@@ -39,6 +41,56 @@ const normalizeToolName = (value: string) => {
   const normalized = value.trim().toLowerCase();
   if (normalized === "web_search") return "external_search";
   return normalized;
+};
+
+const slugify = (value: string) => {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+};
+
+const resolveOrganizationId = async ({
+  supabase,
+  organizationName,
+  subOrganization,
+}: {
+  supabase: ReturnType<typeof createClient>;
+  organizationName?: string;
+  subOrganization?: string;
+}) => {
+  const baseName = "Zasterix";
+  const suffix = subOrganization?.trim();
+  const resolvedName =
+    organizationName?.trim() || (suffix ? `${baseName} ${suffix}` : baseName);
+  const slug = slugify(resolvedName) || "zasterix";
+
+  const { data: existing, error: lookupError } = await supabase
+    .from("organizations")
+    .select("id")
+    .eq("name", resolvedName)
+    .maybeSingle();
+
+  if (lookupError) {
+    console.error("Agent API: organization lookup failed:", lookupError);
+  }
+
+  if (existing?.id) {
+    return existing.id as string;
+  }
+
+  const { data, error } = await supabase
+    .from("organizations")
+    .insert({ name: resolvedName, slug })
+    .select("id")
+    .maybeSingle();
+
+  if (error) {
+    console.error("Agent API: organization insert failed:", error);
+    return null;
+  }
+
+  return data?.id ?? null;
 };
 
 type CompletedTaskEntry = {
@@ -415,11 +467,13 @@ const updateSessionState = async ({
   sessionId,
   targetAgent,
   contextNote,
+  organizationId,
 }: {
   supabase: ReturnType<typeof createClient>;
   sessionId: string;
   targetAgent: { id: string; name: string };
   contextNote?: string;
+  organizationId?: string | null;
 }) => {
   if (!sessionId) return;
 
@@ -446,7 +500,7 @@ const updateSessionState = async ({
   if (existing?.id) {
     const { error } = await supabase
       .from("universal_history")
-      .update({ payload })
+      .update({ payload, organization_id: organizationId ?? null })
       .eq("id", existing.id);
 
     if (error) {
@@ -455,7 +509,9 @@ const updateSessionState = async ({
     return;
   }
 
-  const { error } = await supabase.from("universal_history").insert({ payload });
+  const { error } = await supabase
+    .from("universal_history")
+    .insert({ payload, organization_id: organizationId ?? null });
   if (error) {
     console.error("Agent API: session insert failed:", error);
   }
@@ -679,6 +735,10 @@ export async function POST(req: Request) {
   const stageId = typeof body.stageId === "string" ? body.stageId : "";
   const moduleId = typeof body.moduleId === "string" ? body.moduleId : "";
   const sessionId = typeof body.sessionId === "string" ? body.sessionId : "";
+  const organizationName =
+    typeof body.organizationName === "string" ? body.organizationName : "";
+  const subOrganization =
+    typeof body.subOrganization === "string" ? body.subOrganization : "";
 
   if (!message) {
     return NextResponse.json(
@@ -689,6 +749,12 @@ export async function POST(req: Request) {
 
   const supabase = createClient(url, key, {
     auth: { persistSession: false },
+  });
+
+  const organizationId = await resolveOrganizationId({
+    supabase,
+    organizationName,
+    subOrganization,
   });
 
   let progressContext = "No progress context available.";
@@ -783,10 +849,10 @@ export async function POST(req: Request) {
     : [];
   const allowedToolsPrompt =
     allowedTools.length > 0
-      ? `\n\nDir stehen folgende Werkzeuge zur Verfügung: ${allowedTools.join(
+      ? `\n\nDir stehen folgende Optionen zur Verfügung: ${allowedTools.join(
           ", ",
         )}`
-      : "\n\nDir stehen keine Werkzeuge zur Verfügung.";
+      : "\n\nDir stehen keine Optionen zur Verfügung.";
 
   let replyText = "";
   let outputJson: unknown = null;
@@ -881,6 +947,19 @@ export async function POST(req: Request) {
           target_name: record.target_name,
           message: record.message,
         };
+        await updateSessionState({
+          supabase,
+          sessionId: record.session_id ?? sessionId,
+          targetAgent: {
+            id: record.target_id,
+            name: record.target_name,
+          },
+          contextNote:
+            typeof record.context_note === "string"
+              ? record.context_note
+              : undefined,
+          organizationId,
+        });
       }
     }
 
@@ -945,7 +1024,9 @@ export async function POST(req: Request) {
     handover,
   };
 
-  const { error } = await supabase.from("universal_history").insert({ payload });
+  const { error } = await supabase
+    .from("universal_history")
+    .insert({ payload, organization_id: organizationId ?? null });
 
   if (error) {
     console.error("Agent API insert failed:", error);
@@ -996,6 +1077,7 @@ export async function POST(req: Request) {
           stage_id: stageId,
           module_id: moduleId,
           completed_tasks: mergedTasks,
+          organization_id: organizationId ?? undefined,
           payload: completionPayload ?? existingPayload ?? {},
         },
         { onConflict: "user_id,stage_id,module_id" },
