@@ -17,6 +17,7 @@ type AgentRow = {
   allowed_tools?: string[] | null;
   created_at?: string | null;
   organization_id?: string | null;
+  is_operative?: boolean | null;
 };
 
 export default function SystemHealthPage() {
@@ -55,8 +56,11 @@ export default function SystemHealthPage() {
 
       const { data, error } = await supabase
         .from("agent_templates")
-        .select("id, name, description, allowed_tools, created_at, organization_id")
+        .select(
+          "id, name, description, allowed_tools, created_at, organization_id, is_operative",
+        )
         .eq("organization_id", orgRow.id)
+        .eq("is_operative", true)
         .order("name", { ascending: true });
 
       if (error) {

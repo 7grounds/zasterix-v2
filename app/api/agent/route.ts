@@ -521,19 +521,27 @@ const resolveAgentIdByName = async ({
   supabase,
   organizationId,
   name,
+  preferOperative = true,
 }: {
   supabase: ReturnType<typeof createClient>;
   organizationId: string;
   name: string;
+  preferOperative?: boolean;
 }) => {
   const resolvedName = name.trim();
   if (!resolvedName) return null;
 
-  const { data, error } = await supabase
+  let query = supabase
     .from("agent_templates")
-    .select("id, name")
+    .select("id, name, is_operative")
     .eq("organization_id", organizationId)
-    .ilike("name", `%${resolvedName}%`)
+    .ilike("name", `%${resolvedName}%`);
+
+  if (preferOperative) {
+    query = query.order("is_operative", { ascending: false });
+  }
+
+  const { data, error } = await query
     .order("created_at", { ascending: true })
     .limit(1)
     .maybeSingle();
@@ -998,7 +1006,7 @@ const dispatchTool = async ({
     };
 
     const { data, error } = await supabase
-      .from("tasks")
+      .from("operative_tasks")
       .insert({
         title,
         description,
@@ -1155,10 +1163,96 @@ const dispatchTool = async ({
       organization_id: orgId,
     });
 
+    let automationNote: string | null = null;
+    if (resolvedAgentId && data?.id) {
+      const { data: agentRow, error: agentError } = await supabase
+        .from("agent_templates")
+        .select("id, name, system_prompt, is_operative")
+        .eq("id", resolvedAgentId)
+        .maybeSingle();
+
+      if (!agentError && agentRow?.id && agentRow.is_operative) {
+        await supabase
+          .from("operative_tasks")
+          .update({ status: "processing", updated_at: new Date().toISOString() })
+          .eq("id", data.id);
+
+        try {
+          const response = await fetch(
+            "https://api.openai.com/v1/chat/completions",
+            {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${openAiKey}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                model: OPENAI_MODEL,
+                messages: [
+                  { role: "system", content: agentRow.system_prompt },
+                  {
+                    role: "user",
+                    content: `Operativer Task:\n${title}\n\nDetails:\n${description}\n\nBitte liefere konkrete Handlungsschritte und einen Status-Update.`,
+                  },
+                ],
+                temperature: 0.2,
+              }),
+            },
+          );
+
+          if (!response.ok) {
+            const errorBody = await response.text();
+            console.error(
+              "Agent API: operative task OpenAI error",
+              response.status,
+              errorBody,
+            );
+            await supabase
+              .from("operative_tasks")
+              .update({
+                status: "failed",
+                updated_at: new Date().toISOString(),
+              })
+              .eq("id", data.id);
+          } else {
+            const resultData = await response.json();
+            const output = resultData?.choices?.[0]?.message?.content ?? "";
+            await supabase
+              .from("operative_tasks")
+              .update({
+                status: "completed",
+                response: output,
+                processed_at: new Date().toISOString(),
+                updated_at: new Date().toISOString(),
+              })
+              .eq("id", data.id);
+            await supabase.from("universal_history").insert({
+              payload: {
+                type: "operative_task_completed",
+                task_id: data.id,
+                agent_id: resolvedAgentId,
+                organization_id: orgId,
+                summary: title,
+              },
+              organization_id: orgId,
+            });
+            automationNote = `Operativer Agent ${agentRow.name} hat den Task verarbeitet.`;
+          }
+        } catch (error) {
+          console.error("Agent API: operative task exception", error);
+          await supabase
+            .from("operative_tasks")
+            .update({ status: "failed", updated_at: new Date().toISOString() })
+            .eq("id", data.id);
+        }
+      }
+    }
+
     return {
       data: {
         task_id: data?.id ?? null,
         message: "Feedback-Task wurde erstellt.",
+        automation_note: automationNote,
       },
     };
   }
@@ -1179,8 +1273,8 @@ const dispatchTool = async ({
     const includePrompts =
       payload.include_prompts === true || payload.includePrompts === true;
     const fields = includePrompts
-      ? "id, name, description, system_prompt, allowed_tools, organization_id, parent_id, created_at"
-      : "id, name, description, allowed_tools, organization_id, parent_id, created_at";
+      ? "id, name, description, system_prompt, allowed_tools, organization_id, parent_id, created_at, is_operative"
+      : "id, name, description, allowed_tools, organization_id, parent_id, created_at, is_operative";
 
     let query = supabase
       .from("agent_templates")
@@ -1212,21 +1306,29 @@ const dispatchTool = async ({
       typeof payload.organization_id === "string"
         ? payload.organization_id.trim()
         : organizationId ?? "";
+    const onlyOperative =
+      payload.only_operative === true || payload.onlyOperative === true;
     const includePrompts =
       payload.include_prompts === true || payload.includePrompts === true;
     const fields = includePrompts
-      ? "id, name, description, system_prompt, allowed_tools, organization_id, parent_id, created_at"
-      : "id, name, description, allowed_tools, organization_id, parent_id, created_at";
+      ? "id, name, description, system_prompt, allowed_tools, organization_id, parent_id, created_at, is_operative"
+      : "id, name, description, allowed_tools, organization_id, parent_id, created_at, is_operative";
 
     if (!orgId) {
       return { error: "get_system_capabilities requires organization_id" };
     }
 
-    const { data, error } = await supabase
+    let query = supabase
       .from("agent_templates")
       .select(fields)
       .eq("organization_id", orgId)
       .order("created_at", { ascending: true });
+
+    if (onlyOperative) {
+      query = query.eq("is_operative", true);
+    }
+
+    const { data, error } = await query;
 
     if (error) {
       return { error: error.message };

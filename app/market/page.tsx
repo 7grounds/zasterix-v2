@@ -70,6 +70,7 @@ export default function MarketPage() {
         .from("agent_templates")
         .select("id, name, description, system_prompt")
         .eq("organization_id", orgRow.id)
+        .eq("is_operative", false)
         .order("created_at", { ascending: true });
 
       if (!isMounted) return;
