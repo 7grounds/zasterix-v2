@@ -246,6 +246,94 @@ Agent Response: ${replyText}
   }
 };
 
+type ToolCall = {
+  name: string;
+  payload: Record<string, unknown>;
+  raw: string;
+};
+
+const parseToolCall = (text: string): ToolCall | null => {
+  const match = text.match(
+    /\[USE_TOOL:\s*([^\|\]]+)\s*\|\s*payload:\s*(\{[\s\S]*?\})\s*\]/i,
+  );
+  if (!match) return null;
+  const name = match[1]?.trim();
+  const payloadRaw = match[2]?.trim();
+  if (!name || !payloadRaw) return null;
+  try {
+    const payload = JSON.parse(payloadRaw) as Record<string, unknown>;
+    return { name, payload, raw: match[0] };
+  } catch (_error) {
+    return { name, payload: { raw: payloadRaw }, raw: match[0] };
+  }
+};
+
+const dispatchTool = async ({
+  supabase,
+  tool,
+  userId,
+  stageId,
+  moduleId,
+}: {
+  supabase: ReturnType<typeof createClient>;
+  tool: ToolCall;
+  userId?: string;
+  stageId?: string;
+  moduleId?: string;
+}) => {
+  const toolName = tool.name.toLowerCase();
+
+  if (toolName === "user_asset_history") {
+    const query = supabase.from("user_asset_history").select("*").limit(5);
+    if (tool.payload.user_id) {
+      query.eq("user_id", String(tool.payload.user_id));
+    }
+    if (tool.payload.isin) {
+      query.eq("isin", String(tool.payload.isin));
+    }
+    const { data, error } = await query.order("analyzed_at", {
+      ascending: false,
+    });
+    if (error) {
+      return { error: error.message };
+    }
+    return { data };
+  }
+
+  if (toolName === "progress_tracker") {
+    let query = supabase
+      .from("user_progress")
+      .select("stage_id, module_id, completed_tasks, payload")
+      .limit(1);
+    if (tool.payload.user_id) {
+      query = query.eq("user_id", String(tool.payload.user_id));
+    } else if (userId) {
+      query = query.eq("user_id", userId);
+    }
+    if (tool.payload.stage_id) {
+      query = query.eq("stage_id", String(tool.payload.stage_id));
+    } else if (stageId) {
+      query = query.eq("stage_id", stageId);
+    }
+    if (tool.payload.module_id) {
+      query = query.eq("module_id", String(tool.payload.module_id));
+    } else if (moduleId) {
+      query = query.eq("module_id", moduleId);
+    }
+    const { data, error } = await query.maybeSingle();
+    if (error) {
+      return { error: error.message };
+    }
+    return { data };
+  }
+
+  if (toolName === "external_search") {
+    return { error: "external_search not configured" };
+  }
+
+  return { error: `Tool not supported: ${tool.name}` };
+};
+
 export async function POST(req: Request) {
   const { url, key } = resolveSupabaseConfig();
   if (!url || !key) {
@@ -359,6 +447,8 @@ export async function POST(req: Request) {
 
   let replyText = "";
   let outputJson: unknown = null;
+  let toolCall: ToolCall | null = null;
+  let toolResult: Record<string, unknown> | null = null;
 
   try {
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -391,6 +481,7 @@ export async function POST(req: Request) {
 
     const data = await response.json();
     replyText = data?.choices?.[0]?.message?.content ?? "";
+    toolCall = parseToolCall(replyText);
     const cleaned = stripCodeFence(replyText);
     try {
       outputJson = JSON.parse(cleaned);
@@ -405,6 +496,62 @@ export async function POST(req: Request) {
     );
   }
 
+  if (toolCall) {
+    toolResult = await dispatchTool({
+      supabase,
+      tool: toolCall,
+      userId,
+      stageId,
+      moduleId,
+    });
+
+    try {
+      const response = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${openAiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: OPENAI_MODEL,
+          messages: [
+            {
+              role: "system",
+              content: `${agent.system_prompt}\n\nProgress Context:\n${progressContext}`,
+            },
+            { role: "user", content: message },
+            { role: "assistant", content: replyText },
+            {
+              role: "user",
+              content: `Tool Result (${toolCall.name}): ${JSON.stringify(toolResult)}`,
+            },
+          ],
+          temperature: 0.2,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorBody = await response.text();
+        console.error(
+          "Agent API: OpenAI tool follow-up error",
+          response.status,
+          errorBody,
+        );
+      } else {
+        const data = await response.json();
+        replyText = data?.choices?.[0]?.message?.content ?? replyText;
+        const cleaned = stripCodeFence(replyText);
+        try {
+          outputJson = JSON.parse(cleaned);
+        } catch (_parseError) {
+          outputJson = null;
+        }
+      }
+    } catch (error) {
+      console.error("Agent API: tool follow-up exception", error);
+    }
+  }
+
   const payload = {
     type: "agent_chat",
     agent_id: agent.id,
@@ -414,6 +561,8 @@ export async function POST(req: Request) {
     output_raw: replyText,
     output_is_json: Boolean(outputJson),
     model: OPENAI_MODEL,
+    tool_call: toolCall,
+    tool_result: toolResult,
   };
 
   const { error } = await supabase.from("universal_history").insert({ payload });
@@ -484,6 +633,8 @@ export async function POST(req: Request) {
     reply: replyText,
     feedback: buildFeedbackMessage(evaluations),
     evaluations,
+    tool_call: toolCall,
+    tool_result: toolResult,
     agent: {
       id: agent.id,
       name: agent.name,
