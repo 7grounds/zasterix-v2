@@ -115,6 +115,9 @@ export default function MarketPage() {
       setMessages((prev) => [
         ...prev,
         { role: "assistant", content: data.reply ?? "Antwort erhalten." },
+        ...(data.feedback
+          ? [{ role: "assistant", content: data.feedback } as ChatMessage]
+          : []),
       ]);
     } catch (_error) {
       setStatus("Netzwerkfehler beim Agenten-Aufruf.");

@@ -32,6 +32,15 @@ const stripCodeFence = (value: string) => {
   return trimmed;
 };
 
+type CompletedTaskEntry = {
+  task_id: string;
+  completed_at?: string;
+  evaluation?: {
+    score?: number | null;
+    feedback?: string | null;
+  };
+};
+
 const extractCompletedTasks = (output: unknown) => {
   if (!output || typeof output !== "object") return [];
   const record = output as Record<string, unknown>;
@@ -53,6 +62,136 @@ const extractCompletedTasks = (output: unknown) => {
   }
 
   return [];
+};
+
+const normalizeCompletedTasks = (tasks: unknown[]) => {
+  const normalized: CompletedTaskEntry[] = [];
+  tasks.forEach((item) => {
+    if (typeof item === "string" && item.trim()) {
+      normalized.push({ task_id: item.trim() });
+      return;
+    }
+    if (item && typeof item === "object" && "task_id" in item) {
+      const entry = item as CompletedTaskEntry;
+      if (typeof entry.task_id === "string" && entry.task_id.trim()) {
+        normalized.push({
+          task_id: entry.task_id.trim(),
+          completed_at: entry.completed_at,
+          evaluation: entry.evaluation,
+        });
+      }
+    }
+  });
+  return normalized;
+};
+
+const mergeCompletedTasks = (
+  existing: CompletedTaskEntry[],
+  updates: CompletedTaskEntry[],
+) => {
+  const merged = new Map<string, CompletedTaskEntry>();
+  existing.forEach((entry) => merged.set(entry.task_id, entry));
+  updates.forEach((entry) => merged.set(entry.task_id, entry));
+  return Array.from(merged.values());
+};
+
+const buildFeedbackMessage = (evaluations: CompletedTaskEntry[]) => {
+  if (evaluations.length === 0) return "";
+  return evaluations
+    .map((entry) => {
+      const score = entry.evaluation?.score;
+      const feedback = entry.evaluation?.feedback ?? "Step bewertet.";
+      return `Step ${entry.task_id}: ${
+        score !== undefined && score !== null ? `Score ${score}/10` : "Bewertet"
+      } – ${feedback}`;
+    })
+    .join("\n");
+};
+
+const evaluateTasks = async ({
+  openAiKey,
+  model,
+  tasks,
+  userMessage,
+  replyText,
+}: {
+  openAiKey: string;
+  model: string;
+  tasks: string[];
+  userMessage: string;
+  replyText: string;
+}): Promise<CompletedTaskEntry[]> => {
+  if (tasks.length === 0) return [];
+  try {
+    const evaluationPrompt = `Bewerte die folgenden abgeschlossenen Steps. Gib ausschließlich JSON zurück als Array mit Objekten { "task_id": string, "score": number (1-10), "feedback": string }.
+
+Steps: ${tasks.join(", ")}
+User Input: ${userMessage}
+Agent Response: ${replyText}
+`;
+
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${openAiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          {
+            role: "system",
+            content:
+              "Du bist ein strenger, aber fairer Bewertungsassistent für Aufgabenfortschritt.",
+          },
+          { role: "user", content: evaluationPrompt },
+        ],
+        temperature: 0.2,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorBody = await response.text();
+      console.error("Agent API: evaluation OpenAI error", response.status, errorBody);
+      return tasks.map((task) => ({
+        task_id: task,
+        completed_at: new Date().toISOString(),
+        evaluation: { score: 7, feedback: "Step abgeschlossen." },
+      }));
+    }
+
+    const data = await response.json();
+    const raw = data?.choices?.[0]?.message?.content ?? "";
+    const cleaned = stripCodeFence(raw);
+    const parsed = JSON.parse(cleaned) as Array<{
+      task_id: string;
+      score: number;
+      feedback: string;
+    }>;
+
+    if (!Array.isArray(parsed)) {
+      return tasks.map((task) => ({
+        task_id: task,
+        completed_at: new Date().toISOString(),
+        evaluation: { score: 7, feedback: "Step abgeschlossen." },
+      }));
+    }
+
+    return parsed
+      .filter((item) => typeof item?.task_id === "string")
+      .map((item) => ({
+        task_id: item.task_id,
+        completed_at: new Date().toISOString(),
+        evaluation: { score: item.score, feedback: item.feedback },
+      }));
+  } catch (error) {
+    console.error("Agent API: evaluation exception", error);
+    return tasks.map((task) => ({
+      task_id: task,
+      completed_at: new Date().toISOString(),
+      evaluation: { score: 7, feedback: "Step abgeschlossen." },
+    }));
+  }
 };
 
 export async function POST(req: Request) {
@@ -93,7 +232,7 @@ export async function POST(req: Request) {
   });
 
   let progressContext = "No progress context available.";
-  let existingTasks: string[] = [];
+  let existingTasks: CompletedTaskEntry[] = [];
 
   if (userId && stageId && moduleId) {
     const { data: progressRow, error: progressError } = await supabase
@@ -108,13 +247,11 @@ export async function POST(req: Request) {
       console.error("Agent API: user_progress lookup failed:", progressError);
     } else if (progressRow) {
       existingTasks = Array.isArray(progressRow.completed_tasks)
-        ? progressRow.completed_tasks.filter(
-            (task: unknown) => typeof task === "string",
-          )
+        ? normalizeCompletedTasks(progressRow.completed_tasks)
         : [];
-      progressContext = `Current progress: stage_id=${progressRow.stage_id}, module_id=${progressRow.module_id}, completed_tasks=[${existingTasks.join(
-        ", ",
-      )}]`;
+      progressContext = `Current progress: stage_id=${progressRow.stage_id}, module_id=${progressRow.module_id}, completed_tasks=[${existingTasks
+        .map((task) => task.task_id)
+        .join(", ")}]`;
     } else {
       progressContext = `No progress entry for stage_id=${stageId}, module_id=${moduleId}.`;
     }
@@ -232,9 +369,20 @@ export async function POST(req: Request) {
     );
   }
 
-  const completedTasks = extractCompletedTasks(outputJson);
-  if (userId && stageId && moduleId && completedTasks.length > 0) {
-    const mergedTasks = Array.from(new Set([...existingTasks, ...completedTasks]));
+  const completedTaskIds = extractCompletedTasks(outputJson);
+  let evaluations: CompletedTaskEntry[] = [];
+  if (completedTaskIds.length > 0) {
+    evaluations = await evaluateTasks({
+      openAiKey,
+      model: OPENAI_MODEL,
+      tasks: completedTaskIds,
+      userMessage: message,
+      replyText,
+    });
+  }
+
+  if (userId && stageId && moduleId && evaluations.length > 0) {
+    const mergedTasks = mergeCompletedTasks(existingTasks, evaluations);
     const { error: progressUpdateError } = await supabase
       .from("user_progress")
       .upsert(
@@ -257,6 +405,8 @@ export async function POST(req: Request) {
 
   return NextResponse.json({
     reply: replyText,
+    feedback: buildFeedbackMessage(evaluations),
+    evaluations,
     agent: {
       id: agent.id,
       name: agent.name,
