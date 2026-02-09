@@ -38,6 +38,8 @@ const TOOL_OPTIONS = [
   { value: "universal_history", label: "universal_history" },
   { value: "agent_templates", label: "agent_templates" },
   { value: "tool_registry", label: "tool_registry" },
+  { value: "ticket_creation", label: "ticket_creation" },
+  { value: "sentiment_analysis", label: "sentiment_analysis" },
 ];
 
 export default function AdminAgentsPage() {

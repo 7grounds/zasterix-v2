@@ -26,7 +26,57 @@ const TOOL_REGISTRY = [
   { name: "universal_history", status: "active" },
   { name: "agent_templates", status: "active" },
   { name: "tool_registry", status: "active" },
+  { name: "ticket_creation", status: "active" },
+  { name: "sentiment_analysis", status: "active" },
 ];
+
+const analyzeSentiment = (text: string) => {
+  const normalized = text.toLowerCase();
+  const positiveKeywords = [
+    "gut",
+    "danke",
+    "super",
+    "grossartig",
+    "stark",
+    "zufrieden",
+    "hilfreich",
+    "love",
+    "great",
+    "excellent",
+    "amazing",
+  ];
+  const negativeKeywords = [
+    "schlecht",
+    "problem",
+    "beschwerde",
+    "frustriert",
+    "enttaeuscht",
+    "unzufrieden",
+    "bug",
+    "fehler",
+    "issue",
+    "hate",
+    "broken",
+  ];
+
+  const positiveHits = positiveKeywords.filter((keyword) =>
+    normalized.includes(keyword),
+  );
+  const negativeHits = negativeKeywords.filter((keyword) =>
+    normalized.includes(keyword),
+  );
+  const score = positiveHits.length - negativeHits.length;
+  const sentiment = score > 0 ? "positive" : score < 0 ? "negative" : "neutral";
+
+  return {
+    sentiment,
+    score,
+    matches: {
+      positive: Array.from(new Set(positiveHits)),
+      negative: Array.from(new Set(negativeHits)),
+    },
+  };
+};
 
 const resolveSupabaseConfig = () => {
   return {
@@ -741,6 +791,97 @@ const dispatchTool = async ({
       return { error: error.message };
     }
     return { data };
+  }
+
+  if (toolName === "sentiment_analysis") {
+    const payload = tool.payload ?? {};
+    const text =
+      typeof payload.text === "string"
+        ? payload.text.trim()
+        : typeof payload.message === "string"
+          ? payload.message.trim()
+          : typeof payload.content === "string"
+            ? payload.content.trim()
+            : "";
+    if (!text) {
+      return { error: "sentiment_analysis requires text" };
+    }
+    return { data: analyzeSentiment(text) };
+  }
+
+  if (toolName === "ticket_creation") {
+    const payload = tool.payload ?? {};
+    const summary =
+      typeof payload.summary === "string"
+        ? payload.summary.trim()
+        : typeof payload.title === "string"
+          ? payload.title.trim()
+          : "";
+    const description =
+      typeof payload.description === "string"
+        ? payload.description.trim()
+        : typeof payload.details === "string"
+          ? payload.details.trim()
+          : typeof payload.message === "string"
+            ? payload.message.trim()
+            : "";
+    const category =
+      typeof payload.category === "string"
+        ? payload.category.trim()
+        : typeof payload.type === "string"
+          ? payload.type.trim()
+          : "";
+    const priority =
+      typeof payload.priority === "string"
+        ? payload.priority.trim()
+        : typeof payload.severity === "string"
+          ? payload.severity.trim()
+          : "";
+    const reporter =
+      typeof payload.reporter === "string"
+        ? payload.reporter.trim()
+        : typeof userId === "string"
+          ? userId
+          : "";
+    const orgId =
+      typeof payload.organization_id === "string"
+        ? payload.organization_id.trim()
+        : organizationId ?? null;
+
+    if (!summary && !description) {
+      return { error: "ticket_creation requires summary or description" };
+    }
+
+    const payloadSummary = summary || description.slice(0, 140);
+    const ticketPayload = {
+      type: "ticket",
+      summary: payloadSummary,
+      description,
+      category: category || "intake",
+      priority: priority || "normal",
+      reporter: reporter || null,
+      source: "sentinel",
+      sentiment:
+        typeof payload.sentiment === "string" ? payload.sentiment.trim() : null,
+      created_at: new Date().toISOString(),
+    };
+
+    const { data, error } = await supabase
+      .from("universal_history")
+      .insert({ payload: ticketPayload, organization_id: orgId })
+      .select("id")
+      .maybeSingle();
+
+    if (error) {
+      return { error: error.message };
+    }
+
+    return {
+      data: {
+        ticket_id: data?.id ?? null,
+        message: "Ticket wurde erstellt.",
+      },
+    };
   }
 
   if (toolName === "agent_templates") {
