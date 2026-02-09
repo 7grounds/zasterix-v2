@@ -1435,6 +1435,35 @@ const dispatchTool = async ({
             .map((entry) => entry.trim())
             .filter(Boolean)
         : [];
+    const targetOrgIdsRaw =
+      payload.target_organization_ids ??
+      payload.target_org_ids ??
+      payload.target_organizations ??
+      payload.target_orgs;
+    const targetOrgNamesRaw =
+      payload.target_organization_names ??
+      payload.target_org_names ??
+      payload.target_org_labels ??
+      payload.target_org_titles;
+    const crossOrg = payload.cross_org === true || payload.crossOrg === true;
+    const includeSource =
+      payload.include_source !== false && payload.includeSource !== false;
+    const targetOrgIds = Array.isArray(targetOrgIdsRaw)
+      ? targetOrgIdsRaw.filter((entry) => typeof entry === "string")
+      : typeof targetOrgIdsRaw === "string"
+        ? targetOrgIdsRaw
+            .split(",")
+            .map((entry) => entry.trim())
+            .filter(Boolean)
+        : [];
+    const targetOrgNames = Array.isArray(targetOrgNamesRaw)
+      ? targetOrgNamesRaw.filter((entry) => typeof entry === "string")
+      : typeof targetOrgNamesRaw === "string"
+        ? targetOrgNamesRaw
+            .split(",")
+            .map((entry) => entry.trim())
+            .filter(Boolean)
+        : [];
 
     if (!orgId) {
       return { error: "sync_context requires organization_id" };
@@ -1453,18 +1482,47 @@ const dispatchTool = async ({
       resolvedTargets.push({ id: resolved ?? null, name: entry });
     }
 
+    const resolvedOrgIds = new Set<string>(targetOrgIds);
+    if (targetOrgNames.length > 0) {
+      const { data: orgRows, error: orgError } = await supabase
+        .from("organizations")
+        .select("id, name")
+        .in("name", targetOrgNames);
+      if (orgError) {
+        return { error: orgError.message };
+      }
+      (orgRows ?? []).forEach((row: { id: string }) =>
+        resolvedOrgIds.add(row.id),
+      );
+    }
+
+    if ((crossOrg || resolvedOrgIds.size > 0) && resolvedOrgIds.size === 0) {
+      return {
+        error: "sync_context cross_org requires target_organization_ids or names",
+      };
+    }
+
+    const targetOrgList = Array.from(resolvedOrgIds);
+    const destinationOrgIds = includeSource
+      ? Array.from(new Set([orgId, ...targetOrgList]))
+      : targetOrgList;
+
+    const insertPayload = destinationOrgIds.map((targetOrgId) => ({
+      payload: {
+        type: "strategy_sync",
+        context_update: contextUpdate,
+        target_agents: resolvedTargets,
+        target_agent_names: targetAgents,
+        source_organization_id: orgId,
+        target_organization_id: targetOrgId,
+      },
+      organization_id: targetOrgId,
+    }));
+
     const { data, error } = await supabase
       .from("universal_history")
-      .insert({
-        payload: {
-          type: "strategy_sync",
-          context_update: contextUpdate,
-          target_agents: resolvedTargets,
-        },
-        organization_id: orgId,
-      })
-      .select("id")
-      .maybeSingle();
+      .insert(insertPayload)
+      .select("id, organization_id");
 
     if (error) {
       return { error: error.message };
@@ -1472,7 +1530,8 @@ const dispatchTool = async ({
 
     return {
       data: {
-        sync_id: data?.id ?? null,
+        sync_ids: (data ?? []).map((row: { id: string }) => row.id),
+        target_organization_ids: destinationOrgIds,
         message: "Context wurde synchronisiert.",
       },
     };
