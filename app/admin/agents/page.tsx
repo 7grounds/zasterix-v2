@@ -33,6 +33,8 @@ const TOOL_OPTIONS = [
   { value: "web_search", label: "web_search" },
   { value: "agent_router", label: "agent_router" },
   { value: "agent_call", label: "agent_call" },
+  { value: "generate_agent_definition", label: "generate_agent_definition" },
+  { value: "process_enterprise_list", label: "process_enterprise_list" },
 ];
 
 export default function AdminAgentsPage() {

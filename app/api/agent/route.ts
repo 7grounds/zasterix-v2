@@ -361,6 +361,154 @@ const parseToolCall = (text: string): ToolCall | null => {
   return null;
 };
 
+const resolveOrganizationRecord = async ({
+  supabase,
+  name,
+}: {
+  supabase: ReturnType<typeof createClient>;
+  name: string;
+}) => {
+  const resolvedName = name.trim();
+  if (!resolvedName) return null;
+  const slug = slugify(resolvedName);
+
+  const { data: existing, error: lookupError } = await supabase
+    .from("organizations")
+    .select("id")
+    .eq("name", resolvedName)
+    .maybeSingle();
+
+  if (lookupError) {
+    console.error("Agent API: organization lookup failed:", lookupError);
+  }
+
+  if (existing?.id) {
+    return existing.id as string;
+  }
+
+  const { data, error } = await supabase
+    .from("organizations")
+    .insert({ name: resolvedName, slug })
+    .select("id")
+    .maybeSingle();
+
+  if (error) {
+    console.error("Agent API: organization insert failed:", error);
+    return null;
+  }
+
+  return data?.id ?? null;
+};
+
+const ensureAgentTemplate = async ({
+  supabase,
+  organizationId,
+  parentId,
+  name,
+  description,
+  systemPrompt,
+  allowedTools,
+}: {
+  supabase: ReturnType<typeof createClient>;
+  organizationId: string;
+  parentId?: string | null;
+  name: string;
+  description: string;
+  systemPrompt: string;
+  allowedTools?: string[];
+}) => {
+  const { data: existing } = await supabase
+    .from("agent_templates")
+    .select("id")
+    .eq("name", name)
+    .eq("organization_id", organizationId)
+    .maybeSingle();
+
+  if (existing?.id) {
+    return existing.id as string;
+  }
+
+  const { data, error } = await supabase
+    .from("agent_templates")
+    .insert({
+      name,
+      description,
+      system_prompt: systemPrompt,
+      organization_id: organizationId,
+      parent_id: parentId ?? null,
+      allowed_tools: allowedTools ?? [],
+    })
+    .select("id")
+    .maybeSingle();
+
+  if (error) {
+    console.error("Agent API: agent insert failed:", error);
+    return null;
+  }
+
+  return data?.id ?? null;
+};
+
+const parseEnterpriseList = (payload: Record<string, unknown>) => {
+  const companyName =
+    typeof payload.company_name === "string"
+      ? payload.company_name
+      : typeof payload.organization === "string"
+        ? payload.organization
+        : typeof payload.name === "string"
+          ? payload.name
+          : "";
+
+  const list =
+    Array.isArray(payload.list)
+      ? payload.list
+      : Array.isArray(payload.employees)
+        ? payload.employees
+        : Array.isArray(payload.members)
+          ? payload.members
+          : typeof payload.list === "string"
+            ? payload.list.split("\n")
+            : typeof payload.employees === "string"
+              ? payload.employees.split("\n")
+              : typeof payload.members === "string"
+                ? payload.members.split("\n")
+                : [];
+
+  const entries =
+    typeof payload.entries === "string"
+      ? payload.entries
+          .split("\n")
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .map((line) => {
+            const [name, role] = line.split("-").map((part) => part.trim());
+            return { name, role };
+          })
+      : [];
+
+  const normalized = [
+    ...list,
+    ...entries,
+  ].flatMap((item: unknown) => {
+    if (typeof item === "string") {
+      const [name, role] = item.split("-").map((part) => part.trim());
+      return [{ name, role }];
+    }
+    if (item && typeof item === "object") {
+      const record = item as Record<string, unknown>;
+      const name = typeof record.name === "string" ? record.name : "";
+      const role = typeof record.role === "string" ? record.role : "";
+      return name ? [{ name, role }] : [];
+    }
+    return [];
+  });
+
+  return {
+    companyName: companyName.trim(),
+    employees: normalized.filter((entry) => entry.name),
+  };
+};
+
 const fetchAgentHierarchy = async (
   supabase: ReturnType<typeof createClient>,
 ) => {
@@ -525,6 +673,7 @@ const dispatchTool = async ({
   moduleId,
   sessionId,
   openAiKey,
+  organizationId,
 }: {
   supabase: ReturnType<typeof createClient>;
   tool: ToolCall;
@@ -533,6 +682,7 @@ const dispatchTool = async ({
   moduleId?: string;
   sessionId?: string;
   openAiKey: string;
+  organizationId?: string | null;
 }) => {
   const toolName = normalizeToolName(tool.name);
 
@@ -640,12 +790,161 @@ const dispatchTool = async ({
           target_id: data.id,
           target_name: data.name,
           output,
+          message: "Agent-Delegation abgeschlossen.",
         },
       };
     } catch (error) {
       console.error("Agent API: agent_call exception", error);
       return { error: "agent_call exception" };
     }
+  }
+
+  if (toolName === "generate_agent_definition") {
+    const name =
+      typeof tool.payload.name === "string" ? tool.payload.name.trim() : "";
+    const systemPrompt =
+      typeof tool.payload.system_prompt === "string"
+        ? tool.payload.system_prompt.trim()
+        : "";
+    const description =
+      typeof tool.payload.description === "string"
+        ? tool.payload.description.trim()
+        : "";
+    const orgIdFromPayload =
+      typeof tool.payload.organization_id === "string"
+        ? tool.payload.organization_id.trim()
+        : "";
+    const orgNameFromPayload =
+      typeof tool.payload.organization_name === "string"
+        ? tool.payload.organization_name.trim()
+        : "";
+    const parentId =
+      typeof tool.payload.parent_id === "string"
+        ? tool.payload.parent_id.trim()
+        : null;
+  const rawTools = tool.payload.allowed_tools ?? tool.payload.allowedTools;
+  const allowedTools = Array.isArray(rawTools)
+    ? rawTools.filter((entry) => typeof entry === "string")
+    : typeof rawTools === "string"
+      ? rawTools
+          .split(",")
+          .map((entry) => entry.trim())
+          .filter(Boolean)
+      : [];
+
+    if (!name || !systemPrompt) {
+      return { error: "generate_agent_definition requires name and system_prompt" };
+    }
+
+    let orgId = orgIdFromPayload || organizationId || "";
+    if (!orgId && orgNameFromPayload) {
+      const resolved = await resolveOrganizationRecord({
+        supabase,
+        name: orgNameFromPayload,
+      });
+      orgId = resolved ?? "";
+    }
+
+    if (!orgId) {
+      return { error: "Organization required to create agent definition" };
+    }
+
+    const createdId = await ensureAgentTemplate({
+      supabase,
+      organizationId: orgId,
+      parentId,
+      name,
+      description,
+      systemPrompt,
+      allowedTools,
+    });
+
+    if (!createdId) {
+      return { error: "Failed to create agent definition" };
+    }
+
+    await supabase.from("universal_history").insert({
+      payload: {
+        type: "agent_definition_created",
+        agent_name: name,
+        agent_id: createdId,
+        organization_id: orgId,
+      },
+      organization_id: orgId,
+    });
+
+    return {
+      data: {
+        agent_id: createdId,
+        message: `Agentenprofil "${name}" wurde angelegt.`,
+      },
+    };
+  }
+
+  if (toolName === "process_enterprise_list") {
+    const { companyName, employees } = parseEnterpriseList(tool.payload);
+    if (!companyName || employees.length === 0) {
+      return { error: "process_enterprise_list requires company_name and employees" };
+    }
+
+    const orgId = await resolveOrganizationRecord({
+      supabase,
+      name: companyName,
+    });
+    if (!orgId) {
+      return { error: "Failed to create organization" };
+    }
+
+    const ceoName = `${companyName} CEO`;
+    const ceoPrompt =
+      "You are the company CEO. Keep the essence clear and delegate only when the value is explicit.";
+    const ceoId = await ensureAgentTemplate({
+      supabase,
+      organizationId: orgId,
+      parentId: null,
+      name: ceoName,
+      description: "Executive lead for the organization.",
+      systemPrompt: ceoPrompt,
+      allowedTools: [],
+    });
+
+    const createdAgents: Array<{ name: string; role: string; id: string | null }> =
+      [];
+    for (const entry of employees) {
+      const role = entry.role || "Specialist";
+      const agentName = `${companyName} ${role}`;
+      const agentPrompt = `You are the ${role} for ${companyName}. Focus on concise, value-driven outputs.`;
+      const agentId = await ensureAgentTemplate({
+        supabase,
+        organizationId: orgId,
+        parentId: ceoId ?? null,
+        name: agentName,
+        description: `Specialist for ${role}.`,
+        systemPrompt: agentPrompt,
+        allowedTools: [],
+      });
+      createdAgents.push({ name: agentName, role, id: agentId });
+    }
+
+    const payload = {
+      type: "enterprise_onboarding",
+      company_name: companyName,
+      employees,
+      created_agents: createdAgents,
+    };
+
+    await supabase
+      .from("universal_history")
+      .insert({ payload, organization_id: orgId });
+
+    return {
+      data: {
+        organization_id: orgId,
+        message:
+          "Agent-Delegation gestartet: Für jeden Mitarbeiter wird ein spezialisierter KI-Helfer erstellt.",
+        created_agents: createdAgents,
+      },
+    };
   }
 
   if (toolName === "agent_router") {
@@ -693,6 +992,7 @@ const dispatchTool = async ({
       sessionId: resolvedSessionId,
       targetAgent: { id: data.id, name: data.name },
       contextNote: contextNote || undefined,
+      organizationId,
     });
 
     return {
@@ -918,15 +1218,16 @@ export async function POST(req: Request) {
         error: `Tool not allowed: ${toolCall.name}`,
       };
     } else {
-      toolResult = await dispatchTool({
-        supabase,
-        tool: toolCall,
-        userId,
-        stageId,
-        moduleId,
-        sessionId,
-        openAiKey,
-      });
+    toolResult = await dispatchTool({
+      supabase,
+      tool: toolCall,
+      userId,
+      stageId,
+      moduleId,
+      sessionId,
+      openAiKey,
+      organizationId,
+    });
     }
 
     if (
