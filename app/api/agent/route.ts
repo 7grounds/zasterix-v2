@@ -8,6 +8,7 @@ type AgentRequest = {
   userId?: string;
   stageId?: string;
   moduleId?: string;
+  sessionId?: string;
 };
 
 const OPENAI_MODEL = "gpt-4o";
@@ -285,18 +286,99 @@ const parseToolCall = (text: string): ToolCall | null => {
   return null;
 };
 
+const isNavigator = (agent: { name: string; system_prompt: string }) => {
+  const haystack = `${agent.name} ${agent.system_prompt}`.toLowerCase();
+  return (
+    haystack.includes("navigator") ||
+    haystack.includes("routing") ||
+    haystack.includes("router") ||
+    haystack.includes("flow")
+  );
+};
+
+const buildAgentDirectory = async (supabase: ReturnType<typeof createClient>) => {
+  const { data, error } = await supabase
+    .from("agent_templates")
+    .select("id, name")
+    .order("name", { ascending: true });
+
+  if (error) {
+    console.error("Agent API: agent directory fetch failed:", error);
+    return "";
+  }
+
+  const directory = (data ?? [])
+    .map((row: { id: string; name: string }) => `${row.id} - ${row.name}`)
+    .join("\n");
+
+  return directory ? `\n\nAvailable Agents:\n${directory}` : "";
+};
+
+const updateSessionState = async ({
+  supabase,
+  sessionId,
+  targetAgent,
+  contextNote,
+}: {
+  supabase: ReturnType<typeof createClient>;
+  sessionId: string;
+  targetAgent: { id: string; name: string };
+  contextNote?: string;
+}) => {
+  if (!sessionId) return;
+
+  const payload = {
+    type: "agent_session",
+    session_id: sessionId,
+    active_agent_id: targetAgent.id,
+    active_agent_name: targetAgent.name,
+    context_note: contextNote ?? null,
+    updated_at: new Date().toISOString(),
+  };
+
+  const { data: existing, error: lookupError } = await supabase
+    .from("universal_history")
+    .select("id")
+    .eq("payload->>type", "agent_session")
+    .eq("payload->>session_id", sessionId)
+    .maybeSingle();
+
+  if (lookupError) {
+    console.error("Agent API: session lookup failed:", lookupError);
+  }
+
+  if (existing?.id) {
+    const { error } = await supabase
+      .from("universal_history")
+      .update({ payload })
+      .eq("id", existing.id);
+
+    if (error) {
+      console.error("Agent API: session update failed:", error);
+    }
+    return;
+  }
+
+  const { error } = await supabase.from("universal_history").insert({ payload });
+  if (error) {
+    console.error("Agent API: session insert failed:", error);
+  }
+};
+
 const dispatchTool = async ({
   supabase,
   tool,
   userId,
   stageId,
   moduleId,
+  sessionId,
 }: {
   supabase: ReturnType<typeof createClient>;
   tool: ToolCall;
   userId?: string;
   stageId?: string;
   moduleId?: string;
+  sessionId?: string;
 }) => {
   const toolName = tool.name.toLowerCase();
 
@@ -350,11 +432,23 @@ const dispatchTool = async ({
 
   if (toolName === "agent_router") {
     const target =
-      typeof tool.payload.target === "string"
-        ? tool.payload.target.trim()
-        : typeof tool.payload.name === "string"
-          ? tool.payload.name.trim()
+      typeof tool.payload.target_id === "string"
+        ? tool.payload.target_id.trim()
+        : typeof tool.payload.target === "string"
+          ? tool.payload.target.trim()
+          : typeof tool.payload.name === "string"
+            ? tool.payload.name.trim()
+            : "";
+    const contextNote =
+      typeof tool.payload.context_note === "string"
+        ? tool.payload.context_note.trim()
+        : typeof tool.payload.note === "string"
+          ? tool.payload.note.trim()
           : "";
+    const resolvedSessionId =
+      typeof tool.payload.session_id === "string"
+        ? tool.payload.session_id
+        : sessionId ?? "";
 
     if (!target) {
       return { error: "agent_router target missing" };
@@ -363,7 +457,7 @@ const dispatchTool = async ({
     const { data, error } = await supabase
       .from("agent_templates")
       .select("id, name, description, system_prompt")
-      .ilike("name", `%${target}%`)
+      .or(`id.eq.${target},name.ilike.%${target}%`)
       .order("created_at", { ascending: true })
       .limit(1)
       .maybeSingle();
@@ -376,11 +470,20 @@ const dispatchTool = async ({
       return { error: `Agent not found for target: ${target}` };
     }
 
+    await updateSessionState({
+      supabase,
+      sessionId: resolvedSessionId,
+      targetAgent: { id: data.id, name: data.name },
+      contextNote: contextNote || undefined,
+    });
+
     return {
       data: {
         target_id: data.id,
         target_name: data.name,
         message: `Übergebe an Spezial-Agent ${data.name}...`,
+        session_id: resolvedSessionId || null,
+        context_note: contextNote || null,
       },
     };
   }
@@ -413,6 +516,7 @@ export async function POST(req: Request) {
   const userId = typeof body.userId === "string" ? body.userId : "";
   const stageId = typeof body.stageId === "string" ? body.stageId : "";
   const moduleId = typeof body.moduleId === "string" ? body.moduleId : "";
+  const sessionId = typeof body.sessionId === "string" ? body.sessionId : "";
 
   if (!message) {
     return NextResponse.json(
@@ -499,6 +603,10 @@ export async function POST(req: Request) {
     agent = data;
   }
 
+  const agentDirectory = isNavigator(agent)
+    ? await buildAgentDirectory(supabase)
+    : "";
+
   let replyText = "";
   let outputJson: unknown = null;
   let toolCall: ToolCall | null = null;
@@ -519,7 +627,7 @@ export async function POST(req: Request) {
         messages: [
           {
             role: "system",
-            content: `${agent.system_prompt}\n\nProgress Context:\n${progressContext}`,
+            content: `${agent.system_prompt}${agentDirectory}\n\nProgress Context:\n${progressContext}`,
           },
           { role: "user", content: message },
         ],
@@ -560,6 +668,7 @@ export async function POST(req: Request) {
       userId,
       stageId,
       moduleId,
+      sessionId,
     });
 
     if (
@@ -595,7 +704,7 @@ export async function POST(req: Request) {
           messages: [
             {
               role: "system",
-              content: `${agent.system_prompt}\n\nProgress Context:\n${progressContext}`,
+              content: `${agent.system_prompt}${agentDirectory}\n\nProgress Context:\n${progressContext}`,
             },
             { role: "user", content: message },
             { role: "assistant", content: replyText },
@@ -715,6 +824,10 @@ export async function POST(req: Request) {
     tool_call: toolCall,
     tool_result: toolResult,
     handover,
+    agent_switched: Boolean(handover),
+    active_agent: handover
+      ? { id: handover.target_id, name: handover.target_name }
+      : null,
     agent: {
       id: agent.id,
       name: agent.name,
