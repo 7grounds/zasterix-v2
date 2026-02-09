@@ -3,6 +3,9 @@ import { createClient } from "@supabase/supabase-js";
 type AgentRequest = {
   agentId?: string;
   message?: string;
+  userId?: string;
+  stageId?: string;
+  moduleId?: string;
 };
 
 const OPENAI_MODEL = "gpt-4o";
@@ -29,6 +32,29 @@ const stripCodeFence = (value: string) => {
   return trimmed;
 };
 
+const extractCompletedTasks = (output: unknown) => {
+  if (!output || typeof output !== "object") return [];
+  const record = output as Record<string, unknown>;
+  const candidate =
+    record.completed_tasks ??
+    record.completed_steps ??
+    record.completed_task ??
+    record.completed_step;
+
+  if (Array.isArray(candidate)) {
+    return candidate
+      .filter((item) => typeof item === "string")
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+
+  if (typeof candidate === "string" && candidate.trim()) {
+    return [candidate.trim()];
+  }
+
+  return [];
+};
+
 export async function POST(req: Request) {
   const { url, key } = resolveSupabaseConfig();
   if (!url || !key) {
@@ -51,6 +77,9 @@ export async function POST(req: Request) {
   const body = (await req.json().catch(() => ({}))) as AgentRequest;
   const message = typeof body.message === "string" ? body.message.trim() : "";
   const agentId = typeof body.agentId === "string" ? body.agentId : "";
+  const userId = typeof body.userId === "string" ? body.userId : "";
+  const stageId = typeof body.stageId === "string" ? body.stageId : "";
+  const moduleId = typeof body.moduleId === "string" ? body.moduleId : "";
 
   if (!message) {
     return NextResponse.json(
@@ -62,6 +91,34 @@ export async function POST(req: Request) {
   const supabase = createClient(url, key, {
     auth: { persistSession: false },
   });
+
+  let progressContext = "No progress context available.";
+  let existingTasks: string[] = [];
+
+  if (userId && stageId && moduleId) {
+    const { data: progressRow, error: progressError } = await supabase
+      .from("user_progress")
+      .select("stage_id, module_id, completed_tasks")
+      .eq("user_id", userId)
+      .eq("stage_id", stageId)
+      .eq("module_id", moduleId)
+      .maybeSingle();
+
+    if (progressError) {
+      console.error("Agent API: user_progress lookup failed:", progressError);
+    } else if (progressRow) {
+      existingTasks = Array.isArray(progressRow.completed_tasks)
+        ? progressRow.completed_tasks.filter(
+            (task: unknown) => typeof task === "string",
+          )
+        : [];
+      progressContext = `Current progress: stage_id=${progressRow.stage_id}, module_id=${progressRow.module_id}, completed_tasks=[${existingTasks.join(
+        ", ",
+      )}]`;
+    } else {
+      progressContext = `No progress entry for stage_id=${stageId}, module_id=${moduleId}.`;
+    }
+  }
 
   let agent = null as null | {
     id: string;
@@ -119,7 +176,10 @@ export async function POST(req: Request) {
       body: JSON.stringify({
         model: OPENAI_MODEL,
         messages: [
-          { role: "system", content: agent.system_prompt },
+          {
+            role: "system",
+            content: `${agent.system_prompt}\n\nProgress Context:\n${progressContext}`,
+          },
           { role: "user", content: message },
         ],
         temperature: 0.2,
@@ -170,6 +230,29 @@ export async function POST(req: Request) {
       { error: "Failed to write history." },
       { status: 500 },
     );
+  }
+
+  const completedTasks = extractCompletedTasks(outputJson);
+  if (userId && stageId && moduleId && completedTasks.length > 0) {
+    const mergedTasks = Array.from(new Set([...existingTasks, ...completedTasks]));
+    const { error: progressUpdateError } = await supabase
+      .from("user_progress")
+      .upsert(
+        {
+          user_id: userId,
+          stage_id: stageId,
+          module_id: moduleId,
+          completed_tasks: mergedTasks,
+        },
+        { onConflict: "user_id,stage_id,module_id" },
+      );
+
+    if (progressUpdateError) {
+      console.error(
+        "Agent API: user_progress update failed:",
+        progressUpdateError,
+      );
+    }
   }
 
   return NextResponse.json({
