@@ -269,6 +269,23 @@ const parseToolCall = (text: string): ToolCall | null => {
     }
   }
 
+  const keyValueMatch = text.match(/\[USE_TOOL:\s*([^\|\]]+)\s*\|\s*([^\]]+)\]/i);
+  if (keyValueMatch) {
+    const name = keyValueMatch[1]?.trim();
+    const rest = keyValueMatch[2] ?? "";
+    if (!name) return null;
+    const payload: Record<string, unknown> = {};
+    rest.split("|").forEach((part) => {
+      const [rawKey, ...rawValueParts] = part.split(":");
+      if (!rawKey || rawValueParts.length === 0) return;
+      const key = rawKey.trim();
+      const valueRaw = rawValueParts.join(":").trim();
+      const cleaned = valueRaw.replace(/^"|"$/g, "");
+      payload[key] = cleaned;
+    });
+    return { name, payload, raw: keyValueMatch[0] };
+  }
+
   const targetMatch = text.match(
     /\[USE_TOOL:\s*([^\|\]]+)\s*\|\s*target:\s*"?([^"\]]+)"?\s*\]/i,
   );
@@ -284,6 +301,79 @@ const parseToolCall = (text: string): ToolCall | null => {
   }
 
   return null;
+};
+
+const fetchAgentHierarchy = async (
+  supabase: ReturnType<typeof createClient>,
+) => {
+  const { data, error } = await supabase
+    .from("agent_templates")
+    .select("id, name, description, system_prompt, parent_id")
+    .order("name", { ascending: true });
+
+  if (error) {
+    console.error("Agent API: hierarchy fetch failed:", error);
+    return [] as Array<{
+      id: string;
+      name: string;
+      description: string;
+      system_prompt: string;
+      parent_id: string | null;
+    }>;
+  }
+
+  return (data ?? []) as Array<{
+    id: string;
+    name: string;
+    description: string;
+    system_prompt: string;
+    parent_id: string | null;
+  }>;
+};
+
+const buildHierarchyDirectory = (
+  agents: Array<{
+    id: string;
+    name: string;
+    parent_id: string | null;
+  }>,
+) => {
+  const byParent = new Map<string | null, typeof agents>();
+  agents.forEach((agent) => {
+    const key = agent.parent_id ?? null;
+    const list = byParent.get(key) ?? [];
+    list.push(agent);
+    byParent.set(key, list);
+  });
+
+  const lines: string[] = [];
+  const render = (parentId: string | null, depth: number) => {
+    const children = byParent.get(parentId) ?? [];
+    children.forEach((child) => {
+      const prefix = "  ".repeat(depth);
+      lines.push(`${prefix}- ${child.id} | ${child.name}`);
+      render(child.id, depth + 1);
+    });
+  };
+  render(null, 0);
+  return lines.length ? `\n\nAgent Tree:\n${lines.join("\n")}` : "";
+};
+
+const buildChildContext = (
+  children: Array<{
+    id: string;
+    name: string;
+    system_prompt: string;
+  }>,
+) => {
+  if (children.length === 0) return "";
+  const lines = children.map(
+    (child) =>
+      `- ${child.id} | ${child.name}\nPrompt: ${child.system_prompt}`,
+  );
+  return `\n\nChild Agents (delegate via [USE_TOOL: agent_call | target_id: \"...\"]):\n${lines.join(
+    "\n",
+  )}`;
 };
 
 const isNavigator = (agent: { name: string; system_prompt: string }) => {
@@ -372,6 +462,7 @@ const dispatchTool = async ({
   stageId,
   moduleId,
   sessionId,
+  openAiKey,
 }: {
   supabase: ReturnType<typeof createClient>;
   tool: ToolCall;
@@ -379,6 +470,7 @@ const dispatchTool = async ({
   stageId?: string;
   moduleId?: string;
   sessionId?: string;
+  openAiKey: string;
 }) => {
   const toolName = tool.name.toLowerCase();
 
@@ -428,6 +520,70 @@ const dispatchTool = async ({
 
   if (toolName === "external_search") {
     return { error: "external_search not configured" };
+  }
+
+  if (toolName === "agent_call") {
+    const targetId =
+      typeof tool.payload.target_id === "string"
+        ? tool.payload.target_id.trim()
+        : "";
+    const task =
+      typeof tool.payload.task === "string" ? tool.payload.task.trim() : "";
+
+    if (!targetId || !task) {
+      return { error: "agent_call requires target_id and task" };
+    }
+
+    const { data, error } = await supabase
+      .from("agent_templates")
+      .select("id, name, system_prompt")
+      .eq("id", targetId)
+      .maybeSingle();
+
+    if (error || !data) {
+      return { error: "agent_call target not found" };
+    }
+
+    try {
+      const response = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${openAiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: OPENAI_MODEL,
+          messages: [
+            { role: "system", content: data.system_prompt },
+            { role: "user", content: task },
+          ],
+          temperature: 0.2,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorBody = await response.text();
+        console.error(
+          "Agent API: agent_call OpenAI error",
+          response.status,
+          errorBody,
+        );
+        return { error: "agent_call OpenAI error" };
+      }
+
+      const resultData = await response.json();
+      const output = resultData?.choices?.[0]?.message?.content ?? "";
+      return {
+        data: {
+          target_id: data.id,
+          target_name: data.name,
+          output,
+        },
+      };
+    } catch (error) {
+      console.error("Agent API: agent_call exception", error);
+      return { error: "agent_call exception" };
+    }
   }
 
   if (toolName === "agent_router") {
@@ -603,9 +759,18 @@ export async function POST(req: Request) {
     agent = data;
   }
 
+  const hierarchy = await fetchAgentHierarchy(supabase);
   const agentDirectory = isNavigator(agent)
-    ? await buildAgentDirectory(supabase)
+    ? buildHierarchyDirectory(hierarchy)
     : "";
+  const childAgents = hierarchy.filter((entry) => entry.parent_id === agent.id);
+  const managerContext = buildChildContext(
+    childAgents.map((entry) => ({
+      id: entry.id,
+      name: entry.name,
+      system_prompt: entry.system_prompt,
+    })),
+  );
 
   let replyText = "";
   let outputJson: unknown = null;
@@ -627,7 +792,7 @@ export async function POST(req: Request) {
         messages: [
           {
             role: "system",
-            content: `${agent.system_prompt}${agentDirectory}\n\nProgress Context:\n${progressContext}`,
+            content: `${agent.system_prompt}${agentDirectory}${managerContext}\n\nProgress Context:\n${progressContext}`,
           },
           { role: "user", content: message },
         ],
@@ -669,6 +834,7 @@ export async function POST(req: Request) {
       stageId,
       moduleId,
       sessionId,
+      openAiKey,
     });
 
     if (
@@ -704,7 +870,7 @@ export async function POST(req: Request) {
           messages: [
             {
               role: "system",
-              content: `${agent.system_prompt}${agentDirectory}\n\nProgress Context:\n${progressContext}`,
+              content: `${agent.system_prompt}${agentDirectory}${managerContext}\n\nProgress Context:\n${progressContext}`,
             },
             { role: "user", content: message },
             { role: "assistant", content: replyText },
