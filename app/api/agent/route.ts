@@ -1,7 +1,5 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import { AGENTS } from "../../../lib/agents";
-
 type AgentRequest = {
   agentId?: string;
   message?: string;
@@ -61,13 +59,54 @@ export async function POST(req: Request) {
     );
   }
 
-  const agent = AGENTS.find((entry) => entry.id === agentId) ?? AGENTS[0];
-  let replyText = "";
-  let outputJson: unknown = null;
-
   const supabase = createClient(url, key, {
     auth: { persistSession: false },
   });
+
+  let agent = null as null | {
+    id: string;
+    name: string;
+    description: string;
+    system_prompt: string;
+  };
+
+  if (agentId) {
+    const { data, error } = await supabase
+      .from("agent_templates")
+      .select("id, name, description, system_prompt")
+      .eq("id", agentId)
+      .maybeSingle();
+
+    if (error) {
+      console.error("Agent API: agent_templates lookup failed:", error);
+      return NextResponse.json(
+        { error: "Failed to load agent definition." },
+        { status: 500 },
+      );
+    }
+    agent = data ?? null;
+  }
+
+  if (!agent) {
+    const { data, error } = await supabase
+      .from("agent_templates")
+      .select("id, name, description, system_prompt")
+      .order("created_at", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+
+    if (error || !data) {
+      console.error("Agent API: no agent_templates found:", error);
+      return NextResponse.json(
+        { error: "No agents available." },
+        { status: 404 },
+      );
+    }
+    agent = data;
+  }
+
+  let replyText = "";
+  let outputJson: unknown = null;
 
   try {
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -79,7 +118,7 @@ export async function POST(req: Request) {
       body: JSON.stringify({
         model: OPENAI_MODEL,
         messages: [
-          { role: "system", content: agent.systemPrompt },
+          { role: "system", content: agent.system_prompt },
           { role: "user", content: message },
         ],
         temperature: 0.2,

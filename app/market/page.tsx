@@ -1,7 +1,21 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
-import { AGENTS } from "../../lib/agents";
+import { useEffect, useRef, useState } from "react";
+import { createClient } from "@supabase/supabase-js";
+
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "";
+const supabase =
+  supabaseUrl && supabaseAnonKey
+    ? createClient(supabaseUrl, supabaseAnonKey)
+    : null;
+
+type AgentRow = {
+  id: string;
+  name: string;
+  description: string;
+  system_prompt: string;
+};
 
 type ChatMessage = {
   role: "user" | "assistant";
@@ -9,16 +23,57 @@ type ChatMessage = {
 };
 
 export default function MarketPage() {
-  const tiles = useMemo(() => AGENTS, []);
-  const [activeAgent, setActiveAgent] = useState(() => AGENTS[0] ?? null);
+  const [agents, setAgents] = useState<AgentRow[]>([]);
+  const [activeAgent, setActiveAgent] = useState<AgentRow | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
   const [chatInput, setChatInput] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isSending, setIsSending] = useState(false);
-  const [status, setStatus] = useState<string | null>(null);
+  const [isLoadingAgents, setIsLoadingAgents] = useState(true);
   const panelRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadAgents = async () => {
+      if (!supabase) {
+        if (isMounted) {
+          setStatus("Supabase-Umgebung fehlt.");
+          setIsLoadingAgents(false);
+        }
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from("agent_templates")
+        .select("id, name, description, system_prompt")
+        .order("created_at", { ascending: true });
+
+      if (!isMounted) return;
+
+      if (error) {
+        setStatus(`Fehler: ${error.message}`);
+        setAgents([]);
+        setIsLoadingAgents(false);
+        return;
+      }
+
+      const list = (data ?? []) as AgentRow[];
+      setAgents(list);
+      setActiveAgent((prev) => prev ?? list[0] ?? null);
+      setStatus(null);
+      setIsLoadingAgents(false);
+    };
+
+    loadAgents();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
   const handleSelectAgent = (agentId: string) => {
-    const agent = tiles.find((entry) => entry.id === agentId) ?? null;
+    const agent = agents.find((entry) => entry.id === agentId) ?? null;
     setActiveAgent(agent);
     setMessages([]);
     setStatus(null);
@@ -40,6 +95,7 @@ export default function MarketPage() {
       setStatus("Bitte zuerst einen Agenten auswählen.");
       return;
     }
+
     setIsSending(true);
     setStatus(null);
     setMessages((prev) => [...prev, { role: "user", content: trimmed }]);
@@ -54,14 +110,13 @@ export default function MarketPage() {
       const data = await response.json();
       if (!response.ok) {
         setStatus(data?.error ?? "Fehler beim Agenten-Aufruf.");
-        setIsSending(false);
         return;
       }
       setMessages((prev) => [
         ...prev,
         { role: "assistant", content: data.reply ?? "Antwort erhalten." },
       ]);
-    } catch (error) {
+    } catch (_error) {
       setStatus("Netzwerkfehler beim Agenten-Aufruf.");
     } finally {
       setIsSending(false);
@@ -91,18 +146,26 @@ export default function MarketPage() {
           </p>
           <h1 style={{ fontSize: 28, fontWeight: 600 }}>Agenten-Schaufenster</h1>
           <p style={{ fontSize: 14, color: "#94a3b8" }}>
-            Wähle einen Spezialisten oder teste den Erbrecht-Agenten direkt.
+            Wähle einen Spezialisten, um den Chat zu starten.
           </p>
         </header>
+
+        {status ? (
+          <p style={{ fontSize: 13, color: "#f87171" }}>{status}</p>
+        ) : null}
+
+        {isLoadingAgents ? (
+          <p style={{ fontSize: 13, color: "#94a3b8" }}>Lade Agenten...</p>
+        ) : null}
 
         <section
           style={{
             display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+            gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
             gap: 16,
           }}
         >
-          {tiles.map((agent) => (
+          {agents.map((agent) => (
             <div
               key={agent.id}
               style={{
@@ -121,8 +184,7 @@ export default function MarketPage() {
               }}
               onClick={() => handleSelectAgent(agent.id)}
             >
-              <div style={{ fontSize: 24 }}>{agent.icon}</div>
-              <h3 style={{ marginTop: 8, fontSize: 16 }}>{agent.name}</h3>
+              <h3 style={{ fontSize: 16, fontWeight: 600 }}>{agent.name}</h3>
               <p style={{ marginTop: 6, fontSize: 13, color: "#94a3b8" }}>
                 {agent.description}
               </p>
@@ -135,7 +197,7 @@ export default function MarketPage() {
                   color: "#34d399",
                 }}
               >
-                {agent.category}
+                {agent.id}
               </p>
 
               <div
@@ -145,7 +207,7 @@ export default function MarketPage() {
                 style={{
                   marginTop: 12,
                   overflow: "hidden",
-                  maxHeight: activeAgent?.id === agent.id ? 480 : 0,
+                  maxHeight: activeAgent?.id === agent.id ? 520 : 0,
                   opacity: activeAgent?.id === agent.id ? 1 : 0,
                   transition: "max-height 0.35s ease, opacity 0.35s ease",
                 }}
@@ -161,9 +223,7 @@ export default function MarketPage() {
                   }}
                 >
                   <p style={{ fontSize: 12, color: "#94a3b8" }}>
-                    {activeAgent?.id === agent.id
-                      ? "Input → Architect → Supabase → Output"
-                      : ""}
+                    Input → Architect → Supabase → Output
                   </p>
 
                   <div
@@ -206,9 +266,6 @@ export default function MarketPage() {
                     <p style={{ fontSize: 12, color: "#34d399" }}>
                       Agent analysiert {agent.name}...
                     </p>
-                  ) : null}
-                  {status ? (
-                    <p style={{ fontSize: 12, color: "#f87171" }}>{status}</p>
                   ) : null}
 
                   <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
