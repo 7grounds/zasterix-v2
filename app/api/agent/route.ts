@@ -7,6 +7,8 @@ type AgentRequest = {
   message?: string;
 };
 
+const OPENAI_MODEL = "gpt-4o";
+
 const resolveSupabaseConfig = () => {
   return {
     url:
@@ -21,12 +23,29 @@ const resolveSupabaseConfig = () => {
   };
 };
 
+const stripCodeFence = (value: string) => {
+  const trimmed = value.trim();
+  if (trimmed.startsWith("```")) {
+    return trimmed.replace(/```[a-zA-Z]*\n?/g, "").replace(/```$/g, "").trim();
+  }
+  return trimmed;
+};
+
 export async function POST(req: Request) {
   const { url, key } = resolveSupabaseConfig();
   if (!url || !key) {
     console.error("Agent API: Supabase env missing.");
     return NextResponse.json(
       { error: "Supabase credentials missing." },
+      { status: 500 },
+    );
+  }
+
+  const openAiKey = process.env.OPENAI_API_KEY;
+  if (!openAiKey) {
+    console.error("Agent API: OPENAI_API_KEY missing.");
+    return NextResponse.json(
+      { error: "OpenAI credentials missing." },
       { status: 500 },
     );
   }
@@ -43,18 +62,64 @@ export async function POST(req: Request) {
   }
 
   const agent = AGENTS.find((entry) => entry.id === agentId) ?? AGENTS[0];
-  const reply = `Architect Response (${agent.name}): ${message}`;
+  let replyText = "";
+  let outputJson: unknown = null;
 
   const supabase = createClient(url, key, {
     auth: { persistSession: false },
   });
+
+  try {
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${openAiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: OPENAI_MODEL,
+        messages: [
+          { role: "system", content: agent.systemPrompt },
+          { role: "user", content: message },
+        ],
+        temperature: 0.2,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorBody = await response.text();
+      console.error("Agent API: OpenAI error", response.status, errorBody);
+      return NextResponse.json(
+        { error: "OpenAI request failed." },
+        { status: 500 },
+      );
+    }
+
+    const data = await response.json();
+    replyText = data?.choices?.[0]?.message?.content ?? "";
+    const cleaned = stripCodeFence(replyText);
+    try {
+      outputJson = JSON.parse(cleaned);
+    } catch (parseError) {
+      outputJson = null;
+    }
+  } catch (error) {
+    console.error("Agent API: OpenAI exception", error);
+    return NextResponse.json(
+      { error: "OpenAI request failed." },
+      { status: 500 },
+    );
+  }
 
   const payload = {
     type: "agent_chat",
     agent_id: agent.id,
     agent_name: agent.name,
     input: message,
-    output: reply,
+    output: outputJson ?? replyText,
+    output_raw: replyText,
+    output_is_json: Boolean(outputJson),
+    model: OPENAI_MODEL,
   };
 
   const { error } = await supabase.from("universal_history").insert({ payload });
@@ -68,7 +133,7 @@ export async function POST(req: Request) {
   }
 
   return NextResponse.json({
-    reply,
+    reply: replyText,
     agent: {
       id: agent.id,
       name: agent.name,

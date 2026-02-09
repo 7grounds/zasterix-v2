@@ -164,6 +164,11 @@ export default function MarketPage() {
             )}
           </div>
 
+          {isSending ? (
+            <p style={{ fontSize: 12, color: "#34d399" }}>
+              Agent analysiert Schweizer Recht...
+            </p>
+          ) : null}
           {status ? (
             <p style={{ fontSize: 12, color: "#f87171" }}>{status}</p>
           ) : null}
