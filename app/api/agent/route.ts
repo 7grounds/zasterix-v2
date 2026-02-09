@@ -245,8 +245,9 @@ const resolveOrganizationId = async ({
     console.error("Agent API: organization lookup failed:", lookupError);
   }
 
-  if (existing?.id) {
-    return existing.id as string;
+  const existingId = typeof existing?.id === "string" ? existing.id : null;
+  if (existingId) {
+    return existingId;
   }
 
   const { data, error } = await supabase
@@ -552,8 +553,9 @@ const resolveOrganizationRecord = async ({
     console.error("Agent API: organization lookup failed:", lookupError);
   }
 
-  if (existing?.id) {
-    return existing.id as string;
+  const existingId = typeof existing?.id === "string" ? existing.id : null;
+  if (existingId) {
+    return existingId;
   }
 
   const { data, error } = await supabase
@@ -598,8 +600,9 @@ const ensureAgentTemplate = async ({
     .eq("organization_id", organizationId)
     .maybeSingle();
 
-  if (existing?.id) {
-    return existing.id as string;
+  const existingId = typeof existing?.id === "string" ? existing.id : null;
+  if (existingId) {
+    return existingId;
   }
 
   const { data, error } = await supabase
@@ -887,11 +890,12 @@ const updateSessionState = async ({
     console.error("Agent API: session lookup failed:", lookupError);
   }
 
-  if (existing?.id) {
+  const existingId = typeof existing?.id === "string" ? existing.id : null;
+  if (existingId) {
     const { error } = await supabase
       .from("universal_history")
       .update({ payload, organization_id: organizationId ?? null })
-      .eq("id", existing.id);
+      .eq("id", existingId);
 
     if (error) {
       console.error("Agent API: session update failed:", error);
