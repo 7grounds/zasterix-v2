@@ -1,5 +1,7 @@
+import type { UserProgressRow } from "../../../lib/types";
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+
 type AgentRequest = {
   agentId?: string;
   message?: string;
@@ -106,6 +108,56 @@ const buildFeedbackMessage = (evaluations: CompletedTaskEntry[]) => {
       } – ${feedback}`;
     })
     .join("\n");
+};
+
+const extractScoreFeedback = (
+  output: unknown,
+  replyText: string,
+  evaluations: CompletedTaskEntry[],
+) => {
+  let score: number | null = null;
+  let feedback: string | null = null;
+
+  if (evaluations[0]?.evaluation) {
+    score =
+      typeof evaluations[0].evaluation?.score === "number"
+        ? evaluations[0].evaluation?.score ?? null
+        : null;
+    feedback =
+      typeof evaluations[0].evaluation?.feedback === "string"
+        ? evaluations[0].evaluation?.feedback ?? null
+        : null;
+  }
+
+  if (output && typeof output === "object") {
+    const record = output as Record<string, unknown>;
+    if (score === null && typeof record.score === "number") {
+      score = record.score;
+    }
+    if (!feedback && typeof record.feedback === "string") {
+      feedback = record.feedback;
+    }
+  }
+
+  if (score === null) {
+    const scoreMatch = replyText.match(/score\s*[:\-]?\s*(\d{1,2})/i);
+    if (scoreMatch) {
+      const parsed = Number(scoreMatch[1]);
+      score = Number.isNaN(parsed) ? null : parsed;
+    }
+  }
+
+  if (!feedback) {
+    const feedbackMatch = replyText.match(/feedback\s*[:\-]?\s*(.+)/i);
+    if (feedbackMatch) {
+      feedback = feedbackMatch[1].trim();
+    }
+  }
+
+  return {
+    score,
+    feedback: feedback ?? "Step abgeschlossen.",
+  };
 };
 
 const evaluateTasks = async ({
@@ -233,15 +285,16 @@ export async function POST(req: Request) {
 
   let progressContext = "No progress context available.";
   let existingTasks: CompletedTaskEntry[] = [];
+  let existingPayload: Record<string, unknown> | null = null;
 
   if (userId && stageId && moduleId) {
     const { data: progressRow, error: progressError } = await supabase
       .from("user_progress")
-      .select("stage_id, module_id, completed_tasks")
+      .select("stage_id, module_id, completed_tasks, payload")
       .eq("user_id", userId)
       .eq("stage_id", stageId)
       .eq("module_id", moduleId)
-      .maybeSingle();
+      .maybeSingle<UserProgressRow>();
 
     if (progressError) {
       console.error("Agent API: user_progress lookup failed:", progressError);
@@ -249,6 +302,10 @@ export async function POST(req: Request) {
       existingTasks = Array.isArray(progressRow.completed_tasks)
         ? normalizeCompletedTasks(progressRow.completed_tasks)
         : [];
+      existingPayload =
+        progressRow.payload && typeof progressRow.payload === "object"
+          ? (progressRow.payload as Record<string, unknown>)
+          : null;
       progressContext = `Current progress: stage_id=${progressRow.stage_id}, module_id=${progressRow.module_id}, completed_tasks=[${existingTasks
         .map((task) => task.task_id)
         .join(", ")}]`;
@@ -381,7 +438,26 @@ export async function POST(req: Request) {
     });
   }
 
-  if (userId && stageId && moduleId && evaluations.length > 0) {
+  const completionSignal =
+    /\[STATUS:\s*COMPLETED\]/i.test(replyText) ||
+    (outputJson &&
+      typeof outputJson === "object" &&
+      String((outputJson as Record<string, unknown>).status ?? "").toLowerCase() ===
+        "completed");
+
+  const completionPayload = completionSignal
+    ? {
+        ...extractScoreFeedback(outputJson, replyText, evaluations),
+        validated_at: new Date().toISOString(),
+      }
+    : null;
+
+  if (
+    userId &&
+    stageId &&
+    moduleId &&
+    (evaluations.length > 0 || completionPayload)
+  ) {
     const mergedTasks = mergeCompletedTasks(existingTasks, evaluations);
     const { error: progressUpdateError } = await supabase
       .from("user_progress")
@@ -391,6 +467,7 @@ export async function POST(req: Request) {
           stage_id: stageId,
           module_id: moduleId,
           completed_tasks: mergedTasks,
+          payload: completionPayload ?? existingPayload ?? {},
         },
         { onConflict: "user_id,stage_id,module_id" },
       );
