@@ -211,6 +211,12 @@ export default function MarketPage() {
             </button>
           </div>
         </section>
+
+        <footer style={{ textAlign: "center", fontSize: 13, color: "#94a3b8" }}>
+          <a href="/board" style={{ color: "#34d399", textDecoration: "none" }}>
+            Zum Board
+          </a>
+        </footer>
       </div>
     </div>
   );
