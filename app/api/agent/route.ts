@@ -34,6 +34,7 @@ const TOOL_REGISTRY = [
   { name: "sentiment_analysis", status: "active" },
   { name: "create_corrective_task", status: "active" },
   { name: "create_task_from_feedback", status: "active" },
+  { name: "create_task", status: "active" },
   { name: "get_system_capabilities", status: "active" },
   { name: "analyze_synergies", status: "active" },
   { name: "sync_context", status: "active" },
@@ -85,6 +86,27 @@ const analyzeSentiment = (text: string) => {
       negative: Array.from(new Set(negativeHits)),
     },
   };
+};
+
+const TASK_ASSIGNMENT_RULES: Array<{ name: string; match: RegExp }> = [
+  { name: "Zasterix Growth Architect", match: /market|growth|pivot|gtm|go-to-market|validation|competitor|segmentation/i },
+  { name: "Zasterix CFO", match: /budget|finance|pricing|unit economics|roi|cost|margin|cash/i },
+  { name: "Zasterix CTO", match: /tech|architecture|infrastructure|platform|devops|integration/i },
+  { name: "Zasterix CMO", match: /marketing|brand|demand|campaign|positioning|messag/i },
+  { name: "Zasterix COO", match: /operations|process|delivery|execution|workflow|logistics/i },
+  { name: "Zasterix System Auditor", match: /compliance|audit|risk|security|policy/i },
+];
+
+const selectAssignmentTarget = ({
+  title,
+  description,
+}: {
+  title: string;
+  description: string;
+}) => {
+  const text = `${title} ${description}`.toLowerCase();
+  const rule = TASK_ASSIGNMENT_RULES.find((entry) => entry.match.test(text));
+  return rule?.name ?? null;
 };
 
 const resolveSupabaseConfig = () => {
@@ -1076,6 +1098,211 @@ const dispatchTool = async ({
       data: {
         task_id: data?.id ?? null,
         message: "Korrektur-Task wurde erstellt.",
+      },
+    };
+  }
+
+  if (toolName === "create_task") {
+    const payload = tool.payload ?? {};
+    const orgId =
+      typeof payload.organization_id === "string"
+        ? payload.organization_id.trim()
+        : organizationId ?? "";
+    const createdBy =
+      typeof payload.created_by === "string"
+        ? payload.created_by.trim()
+        : "strategy";
+    const tasksRaw = payload.tasks ?? payload.milestones ?? payload.items;
+    const summary =
+      typeof payload.title === "string"
+        ? payload.title.trim()
+        : typeof payload.summary === "string"
+          ? payload.summary.trim()
+          : "";
+    const description =
+      typeof payload.description === "string"
+        ? payload.description.trim()
+        : typeof payload.details === "string"
+          ? payload.details.trim()
+          : "";
+    const priority =
+      typeof payload.priority === "string" ? payload.priority.trim() : "normal";
+    const isHighPriority =
+      typeof payload.is_high_priority === "boolean"
+        ? payload.is_high_priority
+        : typeof payload.isHighPriority === "boolean"
+          ? payload.isHighPriority
+          : priority.toLowerCase() === "high";
+
+    if (!orgId) {
+      return { error: "create_task requires organization_id" };
+    }
+
+    const tasksToCreate: Array<{
+      title: string;
+      description: string;
+      priority: string;
+      is_high_priority: boolean;
+      target_agent_name?: string;
+      target_agent_id?: string;
+    }> = [];
+
+    if (Array.isArray(tasksRaw)) {
+      tasksRaw.forEach((item) => {
+        if (!item) return;
+        if (typeof item === "string") {
+          const title = item.trim();
+          if (!title) return;
+          tasksToCreate.push({
+            title,
+            description: "",
+            priority,
+            is_high_priority: isHighPriority,
+          });
+          return;
+        }
+        if (typeof item === "object") {
+          const record = item as Record<string, unknown>;
+          const itemTitle =
+            typeof record.title === "string"
+              ? record.title.trim()
+              : typeof record.summary === "string"
+                ? record.summary.trim()
+                : "";
+          const itemDescription =
+            typeof record.description === "string"
+              ? record.description.trim()
+              : typeof record.details === "string"
+                ? record.details.trim()
+                : "";
+          if (!itemTitle && !itemDescription) return;
+          tasksToCreate.push({
+            title: itemTitle || itemDescription.slice(0, 120),
+            description: itemDescription,
+            priority:
+              typeof record.priority === "string"
+                ? record.priority.trim()
+                : priority,
+            is_high_priority:
+              typeof record.is_high_priority === "boolean"
+                ? record.is_high_priority
+                : typeof record.isHighPriority === "boolean"
+                  ? record.isHighPriority
+                  : isHighPriority,
+            target_agent_name:
+              typeof record.agent_name === "string"
+                ? record.agent_name.trim()
+                : typeof record.target_agent_name === "string"
+                  ? record.target_agent_name.trim()
+                  : "",
+            target_agent_id:
+              typeof record.agent_id === "string"
+                ? record.agent_id.trim()
+                : typeof record.target_agent_id === "string"
+                  ? record.target_agent_id.trim()
+                  : "",
+          });
+        }
+      });
+    } else if (summary || description) {
+      tasksToCreate.push({
+        title: summary || description.slice(0, 120),
+        description,
+        priority,
+        is_high_priority: isHighPriority,
+      });
+    }
+
+    if (tasksToCreate.length === 0) {
+      return { error: "create_task requires tasks or title/description" };
+    }
+
+    const insertPayload = tasksToCreate.map((task) => ({
+      title: task.title,
+      description: task.description,
+      priority: task.priority,
+      is_high_priority: task.is_high_priority,
+      status: "open",
+      agent_id: task.target_agent_id || null,
+      organization_id: orgId,
+      source: createdBy,
+      metadata: {
+        target_agent_name: task.target_agent_name || null,
+        created_by: createdBy,
+      },
+    }));
+
+    const { data, error } = await supabase
+      .from("tasks")
+      .insert(insertPayload)
+      .select("id, title, description, agent_id");
+
+    if (error) {
+      return { error: error.message };
+    }
+
+    const assignments: Array<{
+      task_id: string;
+      agent_id: string | null;
+      agent_name: string | null;
+    }> = [];
+
+    for (let index = 0; index < (data ?? []).length; index += 1) {
+      const taskRow = data?.[index];
+      if (!taskRow) continue;
+      const taskInput = tasksToCreate[index];
+      let agentId = taskRow.agent_id as string | null;
+      let agentName = taskInput?.target_agent_name || null;
+
+      if (!agentId) {
+        if (!agentName) {
+          agentName = selectAssignmentTarget({
+            title: taskRow.title,
+            description: taskRow.description ?? "",
+          });
+        }
+        if (agentName) {
+          const resolved = await resolveAgentIdByName({
+            supabase,
+            organizationId: orgId,
+            name: agentName,
+          });
+          agentId = resolved ?? null;
+        }
+      }
+
+      if (agentId) {
+        await supabase
+          .from("tasks")
+          .update({
+            agent_id: agentId,
+            status: "assigned",
+          })
+          .eq("id", taskRow.id);
+      }
+
+      assignments.push({
+        task_id: taskRow.id,
+        agent_id: agentId,
+        agent_name: agentName,
+      });
+    }
+
+    await supabase.from("universal_history").insert({
+      payload: {
+        type: "integrator_distribution",
+        organization_id: orgId,
+        tasks_created: (data ?? []).length,
+        assignments,
+      },
+      organization_id: orgId,
+    });
+
+    return {
+      data: {
+        task_ids: (data ?? []).map((row: { id: string }) => row.id),
+        assignments,
+        message: "Strategische Tasks wurden erstellt und verteilt.",
       },
     };
   }

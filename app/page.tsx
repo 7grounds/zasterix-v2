@@ -510,6 +510,9 @@ export default function Page() {
             <a className="hover:text-emerald-300" href="/market">
               Showroom
             </a>
+            <a className="hover:text-emerald-300" href="/admin/command-center">
+              Mission Control
+            </a>
             <a className="hover:text-emerald-300" href="/admin/agents">
               Agentenverwaltung
             </a>
