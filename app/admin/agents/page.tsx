@@ -15,6 +15,7 @@ type AgentRow = {
   name: string;
   description: string;
   system_prompt: string;
+  allowed_tools?: string[] | null;
   created_at?: string | null;
 };
 
@@ -22,7 +23,16 @@ type Draft = {
   name: string;
   description: string;
   system_prompt: string;
+  allowed_tools: string[];
 };
+
+const TOOL_OPTIONS = [
+  { value: "user_asset_history", label: "user_asset_history" },
+  { value: "progress_tracker", label: "progress_tracker" },
+  { value: "web_search", label: "web_search" },
+  { value: "agent_router", label: "agent_router" },
+  { value: "agent_call", label: "agent_call" },
+];
 
 export default function AdminAgentsPage() {
   const [agents, setAgents] = useState<AgentRow[]>([]);
@@ -34,6 +44,7 @@ export default function AdminAgentsPage() {
     name: "",
     description: "",
     system_prompt: "",
+    allowed_tools: [],
   });
 
   const canUseSupabase = useMemo(
@@ -46,7 +57,7 @@ export default function AdminAgentsPage() {
     setIsLoading(true);
     const { data, error } = await supabase
       .from("agent_templates")
-      .select("id, name, description, system_prompt, created_at")
+      .select("id, name, description, system_prompt, allowed_tools, created_at")
       .order("created_at", { ascending: true });
 
     if (error) {
@@ -81,6 +92,7 @@ export default function AdminAgentsPage() {
       name: newAgent.name.trim(),
       description: newAgent.description.trim(),
       system_prompt: newAgent.system_prompt.trim(),
+      allowed_tools: newAgent.allowed_tools,
     });
 
     if (error) {
@@ -89,7 +101,12 @@ export default function AdminAgentsPage() {
       return;
     }
 
-    setNewAgent({ name: "", description: "", system_prompt: "" });
+    setNewAgent({
+      name: "",
+      description: "",
+      system_prompt: "",
+      allowed_tools: [],
+    });
     setStatus(null);
     await loadAgents();
     setIsSaving(false);
@@ -112,6 +129,9 @@ export default function AdminAgentsPage() {
         name: agent.name,
         description: agent.description ?? "",
         system_prompt: agent.system_prompt ?? "",
+        allowed_tools: Array.isArray(agent.allowed_tools)
+          ? agent.allowed_tools
+          : [],
       },
     }));
   };
@@ -130,6 +150,7 @@ export default function AdminAgentsPage() {
         name: draft.name.trim(),
         description: draft.description.trim(),
         system_prompt: draft.system_prompt.trim(),
+        allowed_tools: draft.allowed_tools,
       })
       .eq("id", id);
 
@@ -183,6 +204,33 @@ export default function AdminAgentsPage() {
             }
             style={{ padding: 8, border: "1px solid #cbd5f5", borderRadius: 8 }}
           />
+          <label style={{ fontSize: 12, color: "#64748b" }}>
+            Allowed Tools
+            <select
+              multiple
+              value={newAgent.allowed_tools}
+              onChange={(event) => {
+                const selected = Array.from(
+                  event.target.selectedOptions,
+                ).map((option) => option.value);
+                setNewAgent((prev) => ({ ...prev, allowed_tools: selected }));
+              }}
+              style={{
+                marginTop: 6,
+                padding: 8,
+                border: "1px solid #cbd5f5",
+                borderRadius: 8,
+                width: "100%",
+                minHeight: 120,
+              }}
+            >
+              {TOOL_OPTIONS.map((tool) => (
+                <option key={tool.value} value={tool.value}>
+                  {tool.label}
+                </option>
+              ))}
+            </select>
+          </label>
           <button
             type="button"
             onClick={handleCreate}
@@ -261,6 +309,39 @@ export default function AdminAgentsPage() {
                       }
                       style={{ padding: 8, border: "1px solid #cbd5f5", borderRadius: 8 }}
                     />
+                    <label style={{ fontSize: 12, color: "#64748b" }}>
+                      Allowed Tools
+                      <select
+                        multiple
+                        value={draft.allowed_tools}
+                        onChange={(event) => {
+                          const selected = Array.from(
+                            event.target.selectedOptions,
+                          ).map((option) => option.value);
+                          setDrafts((prev) => ({
+                            ...prev,
+                            [agent.id]: {
+                              ...prev[agent.id],
+                              allowed_tools: selected,
+                            },
+                          }));
+                        }}
+                        style={{
+                          marginTop: 6,
+                          padding: 8,
+                          border: "1px solid #cbd5f5",
+                          borderRadius: 8,
+                          width: "100%",
+                          minHeight: 120,
+                        }}
+                      >
+                        {TOOL_OPTIONS.map((tool) => (
+                          <option key={tool.value} value={tool.value}>
+                            {tool.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
                     <div style={{ display: "flex", gap: 8 }}>
                       <button
                         type="button"
@@ -304,6 +385,13 @@ export default function AdminAgentsPage() {
                     </p>
                     <p style={{ fontSize: 12, color: "#94a3b8" }}>
                       Prompt: {agent.system_prompt.slice(0, 120)}...
+                    </p>
+                    <p style={{ fontSize: 12, color: "#94a3b8" }}>
+                      Tools:{" "}
+                      {Array.isArray(agent.allowed_tools) &&
+                      agent.allowed_tools.length > 0
+                        ? agent.allowed_tools.join(", ")
+                        : "keine"}
                     </p>
                     <div style={{ display: "flex", gap: 8 }}>
                       <button

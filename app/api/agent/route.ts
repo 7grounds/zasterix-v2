@@ -35,6 +35,12 @@ const stripCodeFence = (value: string) => {
   return trimmed;
 };
 
+const normalizeToolName = (value: string) => {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "web_search") return "external_search";
+  return normalized;
+};
+
 type CompletedTaskEntry = {
   task_id: string;
   completed_at?: string;
@@ -472,7 +478,7 @@ const dispatchTool = async ({
   sessionId?: string;
   openAiKey: string;
 }) => {
-  const toolName = tool.name.toLowerCase();
+  const toolName = normalizeToolName(tool.name);
 
   if (toolName === "user_asset_history") {
     const query = supabase.from("user_asset_history").select("*").limit(5);
@@ -722,12 +728,13 @@ export async function POST(req: Request) {
     description: string;
     system_prompt: string;
     category: string | null;
+    allowed_tools: string[] | null;
   };
 
   if (agentId) {
     const { data, error } = await supabase
       .from("agent_templates")
-      .select("id, name, description, system_prompt, category")
+      .select("id, name, description, system_prompt, category, allowed_tools")
       .eq("id", agentId)
       .maybeSingle();
 
@@ -744,7 +751,7 @@ export async function POST(req: Request) {
   if (!agent) {
     const { data, error } = await supabase
       .from("agent_templates")
-      .select("id, name, description, system_prompt, category")
+      .select("id, name, description, system_prompt, category, allowed_tools")
       .order("created_at", { ascending: true })
       .limit(1)
       .maybeSingle();
@@ -771,6 +778,15 @@ export async function POST(req: Request) {
       system_prompt: entry.system_prompt,
     })),
   );
+  const allowedTools = Array.isArray(agent.allowed_tools)
+    ? agent.allowed_tools.map(normalizeToolName)
+    : [];
+  const allowedToolsPrompt =
+    allowedTools.length > 0
+      ? `\n\nDir stehen folgende Werkzeuge zur Verfügung: ${allowedTools.join(
+          ", ",
+        )}`
+      : "\n\nDir stehen keine Werkzeuge zur Verfügung.";
 
   let replyText = "";
   let outputJson: unknown = null;
@@ -792,7 +808,7 @@ export async function POST(req: Request) {
         messages: [
           {
             role: "system",
-            content: `${agent.system_prompt}${agentDirectory}${managerContext}\n\nProgress Context:\n${progressContext}`,
+            content: `${agent.system_prompt}${agentDirectory}${managerContext}${allowedToolsPrompt}\n\nProgress Context:\n${progressContext}`,
           },
           { role: "user", content: message },
         ],
@@ -827,18 +843,28 @@ export async function POST(req: Request) {
   }
 
   if (toolCall) {
-    toolResult = await dispatchTool({
-      supabase,
-      tool: toolCall,
-      userId,
-      stageId,
-      moduleId,
-      sessionId,
-      openAiKey,
-    });
+    const requestedTool = normalizeToolName(toolCall.name);
+    const isAllowed =
+      allowedTools.length > 0 && allowedTools.includes(requestedTool);
+
+    if (!isAllowed) {
+      toolResult = {
+        error: `Tool not allowed: ${toolCall.name}`,
+      };
+    } else {
+      toolResult = await dispatchTool({
+        supabase,
+        tool: toolCall,
+        userId,
+        stageId,
+        moduleId,
+        sessionId,
+        openAiKey,
+      });
+    }
 
     if (
-      toolCall.name.toLowerCase() === "agent_router" &&
+      normalizeToolName(toolCall.name) === "agent_router" &&
       toolResult &&
       "data" in toolResult &&
       toolResult.data &&
@@ -870,7 +896,7 @@ export async function POST(req: Request) {
           messages: [
             {
               role: "system",
-              content: `${agent.system_prompt}${agentDirectory}${managerContext}\n\nProgress Context:\n${progressContext}`,
+              content: `${agent.system_prompt}${agentDirectory}${managerContext}${allowedToolsPrompt}\n\nProgress Context:\n${progressContext}`,
             },
             { role: "user", content: message },
             { role: "assistant", content: replyText },
