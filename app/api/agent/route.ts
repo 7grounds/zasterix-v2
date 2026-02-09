@@ -68,12 +68,13 @@ export async function POST(req: Request) {
     name: string;
     description: string;
     system_prompt: string;
+    category: string | null;
   };
 
   if (agentId) {
     const { data, error } = await supabase
       .from("agent_templates")
-      .select("id, name, description, system_prompt")
+      .select("id, name, description, system_prompt, category")
       .eq("id", agentId)
       .maybeSingle();
 
@@ -90,7 +91,7 @@ export async function POST(req: Request) {
   if (!agent) {
     const { data, error } = await supabase
       .from("agent_templates")
-      .select("id, name, description, system_prompt")
+      .select("id, name, description, system_prompt, category")
       .order("created_at", { ascending: true })
       .limit(1)
       .maybeSingle();
