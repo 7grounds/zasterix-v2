@@ -1,4 +1,8 @@
 import type { UserProgressRow } from "../../../lib/types";
+import {
+  AGENT_BLUEPRINTS,
+  type OrganizationCategory,
+} from "../../../lib/agent_blueprints";
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
@@ -476,6 +480,7 @@ const ensureAgentTemplate = async ({
   description,
   systemPrompt,
   allowedTools,
+  isOperative,
 }: {
   supabase: ReturnType<typeof createClient>;
   organizationId: string;
@@ -484,6 +489,7 @@ const ensureAgentTemplate = async ({
   description: string;
   systemPrompt: string;
   allowedTools?: string[];
+  isOperative?: boolean;
 }) => {
   const { data: existing } = await supabase
     .from("agent_templates")
@@ -505,6 +511,7 @@ const ensureAgentTemplate = async ({
       organization_id: organizationId,
       parent_id: parentId ?? null,
       allowed_tools: allowedTools ?? [],
+      is_operative: isOperative ?? false,
     })
     .select("id")
     .maybeSingle();
@@ -612,6 +619,35 @@ const parseEnterpriseList = (payload: Record<string, unknown>) => {
     companyName: companyName.trim(),
     employees: normalized.filter((entry) => entry.name),
   };
+};
+
+const normalizeOrganizationCategory = (
+  value: string,
+): OrganizationCategory | null => {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return null;
+  if (
+    normalized.includes("school") ||
+    normalized.includes("schule") ||
+    normalized.includes("education") ||
+    normalized.includes("edu") ||
+    normalized.includes("academy") ||
+    normalized.includes("university")
+  ) {
+    return "school";
+  }
+  if (normalized.includes("startup") || normalized.includes("start-up")) {
+    return "startup";
+  }
+  if (
+    normalized.includes("enterprise") ||
+    normalized.includes("company") ||
+    normalized.includes("unternehmen") ||
+    normalized.includes("firma")
+  ) {
+    return "enterprise";
+  }
+  return null;
 };
 
 const fetchAgentHierarchy = async (
@@ -1670,6 +1706,12 @@ const dispatchTool = async ({
       typeof tool.payload.parent_id === "string"
         ? tool.payload.parent_id.trim()
         : null;
+    const isOperative =
+      typeof tool.payload.is_operative === "boolean"
+        ? tool.payload.is_operative
+        : typeof tool.payload.isOperative === "boolean"
+          ? tool.payload.isOperative
+          : undefined;
   const rawTools = tool.payload.allowed_tools ?? tool.payload.allowedTools;
   const allowedTools = Array.isArray(rawTools)
     ? rawTools.filter((entry) => typeof entry === "string")
@@ -1705,6 +1747,7 @@ const dispatchTool = async ({
       description,
       systemPrompt,
       allowedTools,
+      isOperative,
     });
 
     if (!createdId) {
@@ -1731,8 +1774,27 @@ const dispatchTool = async ({
 
   if (toolName === "process_enterprise_list") {
     const { companyName, employees } = parseEnterpriseList(tool.payload);
+    const categoryRaw =
+      typeof tool.payload.organization_category === "string"
+        ? tool.payload.organization_category
+        : typeof tool.payload.category === "string"
+          ? tool.payload.category
+          : typeof tool.payload.organization_type === "string"
+            ? tool.payload.organization_type
+            : typeof tool.payload.org_type === "string"
+              ? tool.payload.org_type
+              : "";
+    const organizationCategory = categoryRaw
+      ? normalizeOrganizationCategory(categoryRaw)
+      : null;
     if (!companyName || employees.length === 0) {
       return { error: "process_enterprise_list requires company_name and employees" };
+    }
+    if (!organizationCategory) {
+      return {
+        error:
+          "process_enterprise_list requires organization_category (School, Startup, Enterprise)",
+      };
     }
 
     const orgId = await resolveOrganizationRecord({
@@ -1754,7 +1816,27 @@ const dispatchTool = async ({
       description: "Executive lead for the organization.",
       systemPrompt: ceoPrompt,
       allowedTools: [],
+      isOperative: true,
     });
+
+    const blueprint = AGENT_BLUEPRINTS[organizationCategory];
+    const blueprintAgents: Array<{ name: string; role: string; id: string | null }> =
+      [];
+    for (const role of blueprint.roles) {
+      const agentName = `${companyName} ${role}`;
+      const agentPrompt = `You are the ${role} for ${companyName}. Deliver concise, actionable output aligned with a ${blueprint.label} organization.`;
+      const agentId = await ensureAgentTemplate({
+        supabase,
+        organizationId: orgId,
+        parentId: ceoId ?? null,
+        name: agentName,
+        description: `${role} blueprint agent for ${blueprint.label}.`,
+        systemPrompt: agentPrompt,
+        allowedTools: [],
+        isOperative: true,
+      });
+      blueprintAgents.push({ name: agentName, role, id: agentId });
+    }
 
     const createdAgents: Array<{ name: string; role: string; id: string | null }> =
       [];
@@ -1770,6 +1852,7 @@ const dispatchTool = async ({
         description: `Specialist for ${role}.`,
         systemPrompt: agentPrompt,
         allowedTools: [],
+        isOperative: true,
       });
       createdAgents.push({ name: agentName, role, id: agentId });
     }
@@ -1777,8 +1860,11 @@ const dispatchTool = async ({
     const payload = {
       type: "enterprise_onboarding",
       company_name: companyName,
+      organization_category: organizationCategory,
+      blueprint_roles: blueprint.roles,
       employees,
       created_agents: createdAgents,
+      created_blueprint_agents: blueprintAgents,
     };
 
     await supabase
@@ -1791,6 +1877,8 @@ const dispatchTool = async ({
         message:
           "Agent-Delegation gestartet: Für jeden Mitarbeiter wird ein spezialisierter KI-Helfer erstellt.",
         created_agents: createdAgents,
+        created_blueprint_agents: blueprintAgents,
+        organization_category: organizationCategory,
       },
     };
   }

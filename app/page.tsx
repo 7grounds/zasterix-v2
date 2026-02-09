@@ -2,6 +2,11 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
+import {
+  AGENT_BLUEPRINTS,
+  ORGANIZATION_CATEGORY_LABELS,
+  type OrganizationCategory,
+} from "../lib/agent_blueprints";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "";
@@ -44,6 +49,35 @@ type TelemetryItem = {
   orgName?: string;
 };
 
+const normalizeCategory = (
+  value: string | null | undefined,
+): OrganizationCategory | null => {
+  if (!value) return null;
+  const normalized = value.trim().toLowerCase();
+  if (
+    normalized.includes("school") ||
+    normalized.includes("schule") ||
+    normalized.includes("education") ||
+    normalized.includes("edu") ||
+    normalized.includes("academy") ||
+    normalized.includes("university")
+  ) {
+    return "school";
+  }
+  if (normalized.includes("startup") || normalized.includes("start-up")) {
+    return "startup";
+  }
+  if (
+    normalized.includes("enterprise") ||
+    normalized.includes("company") ||
+    normalized.includes("unternehmen") ||
+    normalized.includes("firma")
+  ) {
+    return "enterprise";
+  }
+  return null;
+};
+
 const CLUSTERS: Array<{
   id: string;
   label: string;
@@ -77,6 +111,10 @@ export default function Page() {
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [clusters, setClusters] = useState<ClusterView[]>([]);
   const [organizations, setOrganizations] = useState<OrgRow[]>([]);
+  const [agentRecords, setAgentRecords] = useState<AgentRow[]>([]);
+  const [orgCategoryMap, setOrgCategoryMap] = useState<
+    Record<string, OrganizationCategory>
+  >({});
   const [agentDirectory, setAgentDirectory] = useState<Record<string, string>>(
     {},
   );
@@ -173,20 +211,55 @@ export default function Page() {
       return;
     }
 
+    const { data: onboardingRows, error: onboardingError } = await supabase
+      .from("universal_history")
+      .select("organization_id, payload, created_at")
+      .eq("payload->>type", "enterprise_onboarding")
+      .order("created_at", { ascending: false })
+      .limit(200);
+
     const orgList = (orgRows ?? []) as OrgRow[];
     const agents = (agentRows ?? []) as AgentRow[];
     const agentIndex: Record<string, string> = {};
     const orgIndex: Record<string, string> = {};
+    const categoryIndex: Record<string, OrganizationCategory> = {};
+
     agents.forEach((agent) => {
       agentIndex[agent.id] = agent.name;
     });
     orgList.forEach((org) => {
       orgIndex[org.id] = org.name;
     });
+    if (!onboardingError) {
+      (onboardingRows ?? []).forEach(
+        (entry: {
+          organization_id: string | null;
+          payload: Record<string, unknown>;
+        }) => {
+          if (!entry.organization_id) return;
+          if (categoryIndex[entry.organization_id]) return;
+          const payload = entry.payload ?? {};
+          const rawCategory =
+            typeof payload.organization_category === "string"
+              ? payload.organization_category
+              : typeof payload.category === "string"
+                ? payload.category
+                : typeof payload.organization_type === "string"
+                  ? payload.organization_type
+                  : "";
+          const normalized = normalizeCategory(rawCategory);
+          if (normalized) {
+            categoryIndex[entry.organization_id] = normalized;
+          }
+        },
+      );
+    }
 
     setOrganizations(orgList);
+    setAgentRecords(agents);
     setAgentDirectory(agentIndex);
     setOrgDirectory(orgIndex);
+    setOrgCategoryMap(categoryIndex);
     buildClusters(orgList, agents);
     setStatusMessage(null);
     setIsLoading(false);
@@ -313,6 +386,43 @@ export default function Page() {
       window.clearInterval(interval);
     };
   }, [canUseSupabase, loadTelemetry]);
+
+  const blueprintGroups = useMemo(() => {
+    return organizations
+      .map((org) => {
+        const category = orgCategoryMap[org.id];
+        if (!category) return null;
+        const blueprint = AGENT_BLUEPRINTS[category];
+        const orgAgents = agentRecords.filter(
+          (agent) => agent.organization_id === org.id,
+        );
+        const typeCounts = blueprint.roles.map((role) => {
+          const count = orgAgents.filter((agent) =>
+            agent.name.toLowerCase().includes(role.toLowerCase()),
+          ).length;
+          return { role, count };
+        });
+        return {
+          orgId: org.id,
+          orgName: org.name,
+          category,
+          label: ORGANIZATION_CATEGORY_LABELS[category],
+          types: typeCounts,
+        };
+      })
+      .filter(Boolean) as Array<{
+      orgId: string;
+      orgName: string;
+      category: OrganizationCategory;
+      label: string;
+      types: Array<{ role: string; count: number }>;
+    }>;
+  }, [agentRecords, orgCategoryMap, organizations]);
+
+  const unclassifiedOrgs = useMemo(
+    () => organizations.filter((org) => !orgCategoryMap[org.id]),
+    [organizations, orgCategoryMap],
+  );
 
   const handleHireAgent = async () => {
     if (!supabase) return;
@@ -455,6 +565,49 @@ export default function Page() {
               ))}
             </div>
           )}
+        </section>
+
+        <section className="grid gap-4">
+          <h2 className="text-sm uppercase tracking-[0.3em] text-slate-400">
+            Agent Typology
+          </h2>
+          {blueprintGroups.length === 0 ? (
+            <div className="rounded-2xl border border-slate-800/70 bg-slate-900/60 px-4 py-4 text-sm text-slate-300">
+              Keine Blueprint-Zuordnungen gefunden.
+            </div>
+          ) : (
+            <div className="grid gap-4 md:grid-cols-2">
+              {blueprintGroups.map((group) => (
+                <div
+                  key={group.orgId}
+                  className="rounded-2xl border border-slate-800/70 bg-slate-900/60 px-4 py-4"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <h3 className="text-sm font-semibold text-emerald-300">
+                      {group.orgName}
+                    </h3>
+                    <span className="text-[10px] uppercase tracking-[0.2em] text-slate-400">
+                      {group.label}
+                    </span>
+                  </div>
+                  <ul className="mt-3 space-y-2 text-xs text-slate-200">
+                    {group.types.map((item) => (
+                      <li key={item.role} className="flex justify-between gap-3">
+                        <span>{item.role}</span>
+                        <span className="text-slate-400">{item.count}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </div>
+          )}
+          {unclassifiedOrgs.length > 0 ? (
+            <p className="text-xs text-slate-500">
+              Ohne Kategorie:{" "}
+              {unclassifiedOrgs.map((org) => org.name).join(", ")}
+            </p>
+          ) : null}
         </section>
 
         <section className="grid gap-4 md:grid-cols-[1.2fr,1fr]">
