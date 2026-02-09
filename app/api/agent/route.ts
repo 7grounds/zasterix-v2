@@ -253,19 +253,36 @@ type ToolCall = {
 };
 
 const parseToolCall = (text: string): ToolCall | null => {
-  const match = text.match(
+  const payloadMatch = text.match(
     /\[USE_TOOL:\s*([^\|\]]+)\s*\|\s*payload:\s*(\{[\s\S]*?\})\s*\]/i,
   );
-  if (!match) return null;
-  const name = match[1]?.trim();
-  const payloadRaw = match[2]?.trim();
-  if (!name || !payloadRaw) return null;
-  try {
-    const payload = JSON.parse(payloadRaw) as Record<string, unknown>;
-    return { name, payload, raw: match[0] };
-  } catch (_error) {
-    return { name, payload: { raw: payloadRaw }, raw: match[0] };
+  if (payloadMatch) {
+    const name = payloadMatch[1]?.trim();
+    const payloadRaw = payloadMatch[2]?.trim();
+    if (!name || !payloadRaw) return null;
+    try {
+      const payload = JSON.parse(payloadRaw) as Record<string, unknown>;
+      return { name, payload, raw: payloadMatch[0] };
+    } catch (_error) {
+      return { name, payload: { raw: payloadRaw }, raw: payloadMatch[0] };
+    }
   }
+
+  const targetMatch = text.match(
+    /\[USE_TOOL:\s*([^\|\]]+)\s*\|\s*target:\s*"?([^"\]]+)"?\s*\]/i,
+  );
+  if (targetMatch) {
+    const name = targetMatch[1]?.trim();
+    const target = targetMatch[2]?.trim();
+    if (!name || !target) return null;
+    return {
+      name,
+      payload: { target },
+      raw: targetMatch[0],
+    };
+  }
+
+  return null;
 };
 
 const dispatchTool = async ({
@@ -329,6 +346,43 @@ const dispatchTool = async ({
 
   if (toolName === "external_search") {
     return { error: "external_search not configured" };
+  }
+
+  if (toolName === "agent_router") {
+    const target =
+      typeof tool.payload.target === "string"
+        ? tool.payload.target.trim()
+        : typeof tool.payload.name === "string"
+          ? tool.payload.name.trim()
+          : "";
+
+    if (!target) {
+      return { error: "agent_router target missing" };
+    }
+
+    const { data, error } = await supabase
+      .from("agent_templates")
+      .select("id, name, description, system_prompt")
+      .ilike("name", `%${target}%`)
+      .order("created_at", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      return { error: error.message };
+    }
+
+    if (!data) {
+      return { error: `Agent not found for target: ${target}` };
+    }
+
+    return {
+      data: {
+        target_id: data.id,
+        target_name: data.name,
+        message: `Übergebe an Spezial-Agent ${data.name}...`,
+      },
+    };
   }
 
   return { error: `Tool not supported: ${tool.name}` };
@@ -449,6 +503,9 @@ export async function POST(req: Request) {
   let outputJson: unknown = null;
   let toolCall: ToolCall | null = null;
   let toolResult: Record<string, unknown> | null = null;
+  let handover:
+    | { target_id: string; target_name: string; message: string }
+    | null = null;
 
   try {
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -504,6 +561,27 @@ export async function POST(req: Request) {
       stageId,
       moduleId,
     });
+
+    if (
+      toolCall.name.toLowerCase() === "agent_router" &&
+      toolResult &&
+      "data" in toolResult &&
+      toolResult.data &&
+      typeof toolResult.data === "object"
+    ) {
+      const record = toolResult.data as Record<string, unknown>;
+      if (
+        typeof record.target_id === "string" &&
+        typeof record.target_name === "string" &&
+        typeof record.message === "string"
+      ) {
+        handover = {
+          target_id: record.target_id,
+          target_name: record.target_name,
+          message: record.message,
+        };
+      }
+    }
 
     try {
       const response = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -563,6 +641,7 @@ export async function POST(req: Request) {
     model: OPENAI_MODEL,
     tool_call: toolCall,
     tool_result: toolResult,
+    handover,
   };
 
   const { error } = await supabase.from("universal_history").insert({ payload });
@@ -635,6 +714,7 @@ export async function POST(req: Request) {
     evaluations,
     tool_call: toolCall,
     tool_result: toolResult,
+    handover,
     agent: {
       id: agent.id,
       name: agent.name,
