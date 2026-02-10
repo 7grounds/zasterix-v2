@@ -7,7 +7,9 @@ import { NextResponse } from "next/server";
 import {
   createClient,
   type SupabaseClient,
+  type GenericFunction,
   type GenericRelationship,
+  type GenericView,
 } from "@supabase/supabase-js";
 
 type AgentRequest = {
@@ -50,8 +52,8 @@ type Database = {
       operative_tasks: TableShape;
       knowledge_vault: TableShape;
     };
-    Views: Record<string, never>;
-    Functions: Record<string, never>;
+    Views: Record<string, GenericView>;
+    Functions: Record<string, GenericFunction>;
     Enums: Record<string, never>;
     CompositeTypes: Record<string, never>;
   };
