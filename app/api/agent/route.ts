@@ -7,9 +7,7 @@ import { NextResponse } from "next/server";
 import {
   createClient,
   type SupabaseClient,
-  type GenericFunction,
   type GenericRelationship,
-  type GenericView,
 } from "@supabase/supabase-js";
 
 type AgentRequest = {
@@ -32,6 +30,27 @@ type Json =
   | null
   | { [key: string]: Json }
   | Json[];
+
+type GenericSetofOption = {
+  isSetofReturn?: boolean;
+  isOneToOne?: boolean;
+  isNotNullable?: boolean;
+  to: string;
+  from: string;
+};
+
+type GenericFunction = {
+  Args: Record<string, Json> | never;
+  Returns: Json;
+  SetofOptions?: GenericSetofOption;
+};
+
+type GenericView = {
+  Row: Record<string, Json>;
+  Insert: Record<string, Json>;
+  Update: Record<string, Json>;
+  Relationships: GenericRelationship[];
+};
 
 type TableShape = {
   Row: Record<string, Json>;
