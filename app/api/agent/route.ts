@@ -4,7 +4,11 @@ import {
   type OrganizationCategory,
 } from "../../../lib/agent_blueprints";
 import { NextResponse } from "next/server";
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import {
+  createClient,
+  type SupabaseClient,
+  type GenericRelationship,
+} from "@supabase/supabase-js";
 
 type AgentRequest = {
   agentId?: string;
@@ -31,7 +35,7 @@ type TableShape = {
   Row: Record<string, Json>;
   Insert: Record<string, Json>;
   Update: Record<string, Json>;
-  Relationships: Array<Record<string, Json>>;
+  Relationships: GenericRelationship[];
 };
 
 type Database = {
