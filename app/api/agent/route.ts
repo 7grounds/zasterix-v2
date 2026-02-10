@@ -31,6 +31,7 @@ type TableShape = {
   Row: Record<string, Json>;
   Insert: Record<string, Json>;
   Update: Record<string, Json>;
+  Relationships: Array<Record<string, Json>>;
 };
 
 type Database = {
