@@ -75,7 +75,7 @@ const resolveOrganizationId = async ({
     console.error("Agent API: organization lookup failed:", lookupError);
   }
 
-  if (existing?.id) {
+  if (existing && "id" in existing) {
     return existing.id as string;
   }
 
