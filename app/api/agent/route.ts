@@ -75,8 +75,8 @@ const resolveOrganizationId = async ({
     console.error("Agent API: organization lookup failed:", lookupError);
   }
 
-  if (existing && "id" in existing) {
-    return existing.id as string;
+  if (existing && (existing as any).id) {
+    return (existing as any).id as string;
   }
 
   const { data, error } = await supabase
