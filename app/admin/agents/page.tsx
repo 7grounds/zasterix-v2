@@ -41,7 +41,6 @@ export default function AdminAgentsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
-  const [organizationId, setOrganizationId] = useState<string | null>(null);
   const [newAgent, setNewAgent] = useState<Draft>({
     name: "",
     description: "",
@@ -82,23 +81,7 @@ export default function AdminAgentsPage() {
       setIsLoading(false);
       return;
     }
-    const loadOrgAndAgents = async () => {
-      const { data: orgRow, error: orgError } = await supabase
-        .from("organizations")
-        .select("id")
-        .eq("name", "Zasterix")
-        .maybeSingle();
-
-      if (orgError) {
-        setStatus(`Fehler: ${orgError.message}`);
-      } else if (orgRow?.id) {
-        setOrganizationId(orgRow.id);
-      }
-
-      await loadAgents();
-    };
-
-    loadOrgAndAgents();
+    loadAgents();
   }, [canUseSupabase]);
 
   const handleCreate = async () => {
@@ -113,7 +96,6 @@ export default function AdminAgentsPage() {
       description: newAgent.description.trim(),
       system_prompt: newAgent.system_prompt.trim(),
       allowed_tools: newAgent.allowed_tools,
-      organization_id: organizationId ?? undefined,
     });
 
     if (error) {
